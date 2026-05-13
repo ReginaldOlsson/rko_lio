@@ -39,6 +39,7 @@ compat_target_sources(
 target_link_libraries(
   rko_lio.ros
   PRIVATE nlohmann_json::nlohmann_json
+          cv_bridge::cv_bridge
   PUBLIC rko_lio::ros::utils
          # ros deps
          ${geometry_msgs_TARGETS}
@@ -50,6 +51,13 @@ target_link_libraries(
          tf2::tf2
          tf2_ros::static_transform_broadcaster_node
          tf2_ros::tf2_ros
+         # camera tight-coupling deps. Propagated as PUBLIC because we are a
+         # static library; downstream executables (offline_node, online_node
+         # component) need to resolve these symbols at link time.
+         image_transport::image_transport
+         opencv_core
+         opencv_imgproc
+         opencv_calib3d
          # ros deps end
          rko_lio::core
          Sophus::Sophus

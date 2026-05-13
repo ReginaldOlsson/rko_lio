@@ -24,6 +24,10 @@
   <depend>rosbag2_cpp</depend>
   <depend>rosbag2_storage</depend>
   <depend>rclcpp_components</depend>
+  <!-- camera tight-coupling dependencies (only needed when camera_enabled=true at runtime) -->
+  <depend>libopencv-dev</depend>
+  <depend>image_transport</depend>
+  <depend>cv_bridge</depend>
 
   <export>
     <build_type>ament_cmake</build_type>

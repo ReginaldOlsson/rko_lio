@@ -29,3 +29,37 @@ initialization_phase: false
 double_downsample: true
 max_expected_jerk: 3.0
 min_beta: 200.0
+
+# camera tight-coupling (opt-in)
+camera_enabled: false
+# image_topic: /camera/image_raw
+# camera_info_topic: /camera/camera_info
+# camera_frame: <leave empty to use the camera_info / image header frame>
+camera_weight: 1.0
+camera_max_dt_residual_px: 20.0
+camera_min_visible_points: 200
+camera_min_point_depth_m: 0.5
+camera_use_occlusion_zbuf: true
+camera_zbuf_downsample: 4
+camera_warmup_scans: 5
+camera_keyframe_motion_threshold_m: 0.5
+camera_keyframe_rotation_threshold_rad: 0.2
+camera_keyframe_min_dt_s: 0.5
+canny_low_threshold: 50.0
+canny_high_threshold: 150.0
+canny_aperture_size: 3
+image_max_rate_hz: 30.0
+map_frame: map
+publish_map_to_odom_tf: true
+
+# dynamic-point segmentation (opt-in)
+dynamic_segmentation_enabled: false
+dyn_tau_static_m: 0.10
+dyn_tau_dynamic_m: 0.30
+dyn_ema_alpha: 0.20
+dyn_skip_map_score: 0.60
+dyn_weight_decay_k: 4.0
+dyn_min_hits_to_trust: 3
+publish_dynamic_split: false
+# deskewed_scan_static_topic: /rko_lio/frame_static
+# deskewed_scan_dynamic_topic: /rko_lio/frame_dynamic

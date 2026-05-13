@@ -27,9 +27,12 @@
 #include "rko_lio/core/profiler.hpp"
 #include "rko_lio/ros/utils/utils.hpp"
 // other
+#include <cv_bridge/cv_bridge.hpp>
 #include <fstream>
 #include <iostream>
 #include <nlohmann/json.hpp>
+#include <opencv2/calib3d.hpp>
+#include <opencv2/imgproc.hpp>
 #include <rclcpp/serialization.hpp>
 #include <stdexcept>
 
@@ -61,7 +64,25 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LIO::Config,
                                    initialization_phase,
                                    max_expected_jerk,
                                    double_downsample,
-                                   min_beta)
+                                   min_beta,
+                                   camera_enabled,
+                                   camera_weight,
+                                   camera_max_dt_residual_px,
+                                   camera_min_visible_points,
+                                   camera_min_point_depth_m,
+                                   camera_use_occlusion_zbuf,
+                                   camera_zbuf_downsample,
+                                   camera_warmup_scans,
+                                   camera_keyframe_motion_threshold_m,
+                                   camera_keyframe_rotation_threshold_rad,
+                                   camera_keyframe_min_dt_s,
+                                   dynamic_segmentation_enabled,
+                                   dyn_tau_static_m,
+                                   dyn_tau_dynamic_m,
+                                   dyn_ema_alpha,
+                                   dyn_skip_map_score,
+                                   dyn_weight_decay_k,
+                                   dyn_min_hits_to_trust)
 } // namespace rko_lio::core
 
 namespace rko_lio::ros {
@@ -127,7 +148,82 @@ Node::Node(const std::string& node_name, const rclcpp::NodeOptions& options) {
   lio_config.max_expected_jerk = node->declare_parameter<double>("max_expected_jerk", lio_config.max_expected_jerk);
   lio_config.double_downsample = node->declare_parameter<bool>("double_downsample", lio_config.double_downsample);
   lio_config.min_beta = node->declare_parameter<double>("min_beta", lio_config.min_beta);
+
+  // ---- camera tight-coupling parameters (opt-in via camera_enabled) ----
+  lio_config.camera_enabled = node->declare_parameter<bool>("camera_enabled", lio_config.camera_enabled);
+  lio_config.camera_weight = node->declare_parameter<double>("camera_weight", lio_config.camera_weight);
+  lio_config.camera_max_dt_residual_px =
+      node->declare_parameter<double>("camera_max_dt_residual_px", lio_config.camera_max_dt_residual_px);
+  lio_config.camera_min_visible_points =
+      node->declare_parameter<int>("camera_min_visible_points", lio_config.camera_min_visible_points);
+  lio_config.camera_min_point_depth_m =
+      node->declare_parameter<double>("camera_min_point_depth_m", lio_config.camera_min_point_depth_m);
+  lio_config.camera_use_occlusion_zbuf =
+      node->declare_parameter<bool>("camera_use_occlusion_zbuf", lio_config.camera_use_occlusion_zbuf);
+  lio_config.camera_zbuf_downsample =
+      node->declare_parameter<int>("camera_zbuf_downsample", lio_config.camera_zbuf_downsample);
+  lio_config.camera_warmup_scans = node->declare_parameter<int>("camera_warmup_scans", lio_config.camera_warmup_scans);
+  lio_config.camera_keyframe_motion_threshold_m = node->declare_parameter<double>(
+      "camera_keyframe_motion_threshold_m", lio_config.camera_keyframe_motion_threshold_m);
+  lio_config.camera_keyframe_rotation_threshold_rad = node->declare_parameter<double>(
+      "camera_keyframe_rotation_threshold_rad", lio_config.camera_keyframe_rotation_threshold_rad);
+  lio_config.camera_keyframe_min_dt_s =
+      node->declare_parameter<double>("camera_keyframe_min_dt_s", lio_config.camera_keyframe_min_dt_s);
+
+  // ---- dynamic-segmentation parameters (opt-in via dynamic_segmentation_enabled) ----
+  lio_config.dynamic_segmentation_enabled =
+      node->declare_parameter<bool>("dynamic_segmentation_enabled", lio_config.dynamic_segmentation_enabled);
+  lio_config.dyn_tau_static_m = node->declare_parameter<double>("dyn_tau_static_m", lio_config.dyn_tau_static_m);
+  lio_config.dyn_tau_dynamic_m = node->declare_parameter<double>("dyn_tau_dynamic_m", lio_config.dyn_tau_dynamic_m);
+  lio_config.dyn_ema_alpha = node->declare_parameter<double>("dyn_ema_alpha", lio_config.dyn_ema_alpha);
+  lio_config.dyn_skip_map_score = node->declare_parameter<double>("dyn_skip_map_score", lio_config.dyn_skip_map_score);
+  lio_config.dyn_weight_decay_k = node->declare_parameter<double>("dyn_weight_decay_k", lio_config.dyn_weight_decay_k);
+  lio_config.dyn_min_hits_to_trust =
+      node->declare_parameter<int>("dyn_min_hits_to_trust", lio_config.dyn_min_hits_to_trust);
+
   lio = std::make_unique<core::LIO>(lio_config);
+
+  // ROS-side camera parameters (topics, frames, Canny knobs).
+  image_topic = node->declare_parameter<std::string>("image_topic", image_topic);
+  camera_info_topic = node->declare_parameter<std::string>("camera_info_topic", camera_info_topic);
+  camera_frame = node->declare_parameter<std::string>("camera_frame", camera_frame);
+  canny_low_threshold = node->declare_parameter<double>("canny_low_threshold", canny_low_threshold);
+  canny_high_threshold = node->declare_parameter<double>("canny_high_threshold", canny_high_threshold);
+  canny_aperture_size = node->declare_parameter<int>("canny_aperture_size", canny_aperture_size);
+  image_max_rate_hz = node->declare_parameter<double>("image_max_rate_hz", image_max_rate_hz);
+  map_frame = node->declare_parameter<std::string>("map_frame", map_frame);
+  publish_map_to_odom_tf = node->declare_parameter<bool>("publish_map_to_odom_tf", publish_map_to_odom_tf);
+
+  // Publish dynamic-segmentation split topics if requested. Only meaningful
+  // when both `publish_deskewed_scan` and `dynamic_segmentation_enabled` are
+  // on; we silently no-op otherwise to keep the toggle independent of the
+  // other features.
+  publish_dynamic_split = node->declare_parameter<bool>("publish_dynamic_split", publish_dynamic_split) &&
+                           lio_config.dynamic_segmentation_enabled && publish_deskewed_scan;
+  if (publish_dynamic_split) {
+    deskewed_scan_static_topic =
+        node->declare_parameter<std::string>("deskewed_scan_static_topic", deskewed_scan_static_topic);
+    deskewed_scan_dynamic_topic =
+        node->declare_parameter<std::string>("deskewed_scan_dynamic_topic", deskewed_scan_dynamic_topic);
+    frame_static_publisher =
+        node->create_publisher<sensor_msgs::msg::PointCloud2>(deskewed_scan_static_topic, publisher_qos);
+    frame_dynamic_publisher =
+        node->create_publisher<sensor_msgs::msg::PointCloud2>(deskewed_scan_dynamic_topic, publisher_qos);
+  }
+
+  // Camera subscriptions only when the feature is enabled at startup.
+  if (lio_config.camera_enabled) {
+    camera_info_sub = node->create_subscription<sensor_msgs::msg::CameraInfo>(
+        camera_info_topic, rclcpp::QoS(5),
+        [this](const sensor_msgs::msg::CameraInfo::ConstSharedPtr& msg) { camera_info_callback(msg); });
+    image_subscriber = image_transport::create_subscription(
+        node.get(), image_topic,
+        [this](const sensor_msgs::msg::Image::ConstSharedPtr& msg) { image_callback(msg); }, "raw",
+        rclcpp::QoS(rclcpp::SystemDefaultsQoS().keep_last(1).durability_volatile()).get_rmw_qos_profile());
+    RCLCPP_INFO_STREAM(node->get_logger(), "Camera coupling enabled. Subscribing to image: " << image_topic
+                                                                                              << " and camera info: "
+                                                                                              << camera_info_topic);
+  }
 
   // Timestamp processing params - lts for lidar time stamps, without having 100 char param names
   timestamp_proc_config.multiplier_to_seconds =
@@ -199,6 +295,10 @@ void Node::parse_cli_extrinsics() {
 }
 
 bool Node::check_and_set_extrinsics() {
+  // Camera resolution is best-effort and decoupled from the imu/lidar gate
+  // so the rest of the pipeline can start before the camera tf is published.
+  try_set_camera_extrinsic();
+
   if (extrinsics_set) {
     return true;
   }
@@ -214,6 +314,19 @@ bool Node::check_and_set_extrinsics() {
   extrinsic_lidar2base = lidar_transform.value();
   extrinsics_set = true;
   return true;
+}
+
+void Node::try_set_camera_extrinsic() {
+  if (!lio || !lio->config.camera_enabled || lio->camera_extrinsic_set() || camera_frame.empty() ||
+      base_frame.empty()) {
+    return;
+  }
+  const std::optional<Sophus::SE3d> cam = utils::get_transform(tf_buffer, camera_frame, base_frame, 0s);
+  if (cam) {
+    lio->set_camera_extrinsic(*cam);
+    RCLCPP_INFO_STREAM(node->get_logger(),
+                       "Camera extrinsic cam2base resolved as: " << cam->log().transpose());
+  }
 }
 
 void Node::imu_callback(const sensor_msgs::msg::Imu::ConstSharedPtr& imu_msg) {
@@ -290,6 +403,179 @@ void Node::lidar_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& l
   }
 }
 
+void Node::camera_info_callback(const sensor_msgs::msg::CameraInfo::ConstSharedPtr& info_msg) {
+  if (camera_frame.empty()) {
+    if (info_msg->header.frame_id.empty()) {
+      RCLCPP_WARN_ONCE(node->get_logger(),
+                       "CameraInfo header has no frame id; please set camera_frame or fix the producer.");
+      return;
+    }
+    camera_frame = info_msg->header.frame_id;
+    RCLCPP_INFO_STREAM(node->get_logger(), "Parsed the camera frame id as: " << camera_frame);
+    try_set_camera_extrinsic();
+  }
+
+  std::lock_guard lock(camera_intrinsics_mutex);
+  // Build P-matrix-based pinhole intrinsics. P[0:3,0:3] is the rectified
+  // projection so fx, fy, cx, cy come from there. If P is empty, fall back
+  // to K (assumes already-rectified images).
+  const std::array<double, 12>& P = info_msg->p;
+  const std::array<double, 9>& K = info_msg->k;
+  const bool P_valid = P[0] != 0.0;
+  camera_intrinsics.fx = P_valid ? P[0] : K[0];
+  camera_intrinsics.fy = P_valid ? P[5] : K[4];
+  camera_intrinsics.cx = P_valid ? P[2] : K[2];
+  camera_intrinsics.cy = P_valid ? P[6] : K[5];
+  camera_intrinsics.width = static_cast<int>(info_msg->width);
+  camera_intrinsics.height = static_cast<int>(info_msg->height);
+
+  // Build rectification maps if the image is distorted. We use cv::remap with
+  // precomputed maps so each image-callback invocation only pays for one
+  // bilinear remap rather than an undistort solve.
+  bool has_distortion = false;
+  for (double d : info_msg->d) {
+    if (std::abs(d) > 1e-12) {
+      has_distortion = true;
+      break;
+    }
+  }
+  needs_rectification = has_distortion;
+  if (needs_rectification) {
+    cv::Mat K_mat(3, 3, CV_64F);
+    for (int i = 0; i < 9; ++i) {
+      K_mat.at<double>(i / 3, i % 3) = K[i];
+    }
+    cv::Mat D_mat(static_cast<int>(info_msg->d.size()), 1, CV_64F);
+    for (size_t i = 0; i < info_msg->d.size(); ++i) {
+      D_mat.at<double>(static_cast<int>(i), 0) = info_msg->d[i];
+    }
+    cv::Mat R_mat = cv::Mat::eye(3, 3, CV_64F);
+    for (int i = 0; i < 9; ++i) {
+      // R is the stereo rectifying rotation; identity when monocular.
+      if (info_msg->r[i] != 0.0) {
+        R_mat.at<double>(i / 3, i % 3) = info_msg->r[i];
+      }
+    }
+    cv::Mat P_mat(3, 4, CV_64F);
+    for (int i = 0; i < 12; ++i) {
+      P_mat.at<double>(i / 4, i % 4) = P[i];
+    }
+    const cv::Size size(static_cast<int>(info_msg->width), static_cast<int>(info_msg->height));
+    cv::initUndistortRectifyMap(K_mat, D_mat, R_mat, P_mat, size, CV_16SC2, rectify_map_x, rectify_map_y);
+  }
+
+  camera_intrinsics_ready = true;
+}
+
+void Node::image_callback(const sensor_msgs::msg::Image::ConstSharedPtr& image_msg) {
+  if (!lio || !lio->config.camera_enabled) {
+    return;
+  }
+
+  const core::Secondsd stamp = utils::ros_time_to_seconds(image_msg->header.stamp);
+  // Throttle to image_max_rate_hz so a high-rate camera does not starve the
+  // image-callback thread with redundant DT computations.
+  if (image_max_rate_hz > 0.0) {
+    const double min_dt = 1.0 / image_max_rate_hz;
+    if (last_image_processed_time.count() > 0.0 && (stamp - last_image_processed_time).count() < min_dt) {
+      return;
+    }
+  }
+
+  cv::Mat gray;
+  try {
+    auto cv_ptr = cv_bridge::toCvShare(image_msg, "mono8");
+    gray = cv_ptr->image; // shares storage with the message; copy on Canny below
+  } catch (const cv_bridge::Exception& e) {
+    RCLCPP_WARN_STREAM(node->get_logger(), "cv_bridge failure: " << e.what());
+    return;
+  }
+  if (gray.empty()) {
+    return;
+  }
+
+  cv::Mat rectified;
+  core::PinholeIntrinsics intr;
+  {
+    std::lock_guard lock(camera_intrinsics_mutex);
+    if (!camera_intrinsics_ready) {
+      RCLCPP_WARN_ONCE(node->get_logger(), "Dropping camera image: CameraInfo not yet received.");
+      return;
+    }
+    if (needs_rectification) {
+      cv::remap(gray, rectified, rectify_map_x, rectify_map_y, cv::INTER_LINEAR);
+    } else {
+      rectified = gray.clone();
+    }
+    intr = camera_intrinsics;
+  }
+  if (rectified.empty()) {
+    return;
+  }
+  // Make sure dimensions match the CameraInfo (some drivers stream different
+  // sizes briefly during startup).
+  if (rectified.cols != intr.width || rectified.rows != intr.height) {
+    return;
+  }
+
+  cv::Mat edges;
+  cv::Canny(rectified, edges, canny_low_threshold, canny_high_threshold, canny_aperture_size);
+
+  // cv::distanceTransform requires an "inverted" mask: zeros at edge pixels,
+  // non-zero elsewhere.
+  cv::Mat inv;
+  cv::bitwise_not(edges, inv);
+  cv::Mat dt_image;
+  cv::distanceTransform(inv, dt_image, cv::DIST_L2, 3);
+
+  // Pack into a shared float buffer the core can keep alive across threads.
+  auto buf = std::make_shared<std::vector<float>>(static_cast<size_t>(dt_image.rows) *
+                                                  static_cast<size_t>(dt_image.cols));
+  if (dt_image.isContinuous()) {
+    std::memcpy(buf->data(), dt_image.ptr<float>(0), buf->size() * sizeof(float));
+  } else {
+    for (int r = 0; r < dt_image.rows; ++r) {
+      std::memcpy(buf->data() + static_cast<size_t>(r) * static_cast<size_t>(dt_image.cols),
+                  dt_image.ptr<float>(r), static_cast<size_t>(dt_image.cols) * sizeof(float));
+    }
+  }
+  core::CameraFrame frame{};
+  frame.time = stamp;
+  frame.intrinsics = intr;
+  frame.dt_image = buf;
+  frame.rows = dt_image.rows;
+  frame.cols = dt_image.cols;
+
+  {
+    std::lock_guard lock(buffer_mutex);
+    if (camera_buffer.size() >= max_camera_buffer_size) {
+      // Drop the oldest frame; we always prefer the most recent observation.
+      camera_buffer.pop();
+    }
+    camera_buffer.push(std::move(frame));
+  }
+
+  last_image_processed_time = stamp;
+}
+
+void Node::drain_camera_buffer_for_scan(const core::Secondsd& scan_end_time) {
+  if (!lio || !lio->config.camera_enabled) {
+    return;
+  }
+  // Find the most recent camera frame with t_img <= t_scan_end. Drop everything older.
+  std::optional<core::CameraFrame> latest;
+  while (!camera_buffer.empty()) {
+    if (camera_buffer.front().time > scan_end_time) {
+      break; // remaining frames are in the future; leave them for the next scan
+    }
+    latest = std::move(camera_buffer.front());
+    camera_buffer.pop();
+  }
+  if (latest) {
+    lio->add_camera_frame(*latest);
+  }
+}
+
 void Node::registration_loop() {
   while (rclcpp::ok() && atomic_node_running) {
     SCOPED_PROFILER("ROS Registration Loop");
@@ -307,6 +593,9 @@ void Node::registration_loop() {
       const core::ImuControl& imu_data = imu_buffer.front();
       lio->add_imu_measurement(extrinsic_imu2base, imu_data);
     }
+    // Drain camera frames whose timestamps are no newer than this scan's end;
+    // keep the most recent one (Option B in the design doc).
+    drain_camera_buffer_for_scan(end_stamp);
     // check if there are more messages buffered already
     atomic_can_process =
         !imu_buffer.empty() && !lidar_buffer.empty() && imu_buffer.back().time > lidar_buffer.front().timestamps.max;
@@ -329,10 +618,38 @@ void Node::registration_loop() {
           header.frame_id = lidar_frame;
           header.stamp = rclcpp::Time(std::chrono::duration_cast<std::chrono::nanoseconds>(end_stamp).count());
           frame_publisher->publish(utils::eigen_to_point_cloud2(deskewed_frame, header));
+          if (publish_dynamic_split && lio->config.dynamic_segmentation_enabled) {
+            const Sophus::SE3d lidar_to_odom = lio->lidar_state.pose * extrinsic_lidar2base;
+            const auto& dyn_table = lio->voxel_dyn;
+            const double gate = lio->config.dyn_skip_map_score;
+            const int min_hits = lio->config.dyn_min_hits_to_trust;
+            core::Vector3dVector static_points;
+            core::Vector3dVector dynamic_points;
+            static_points.reserve(deskewed_frame.size());
+            dynamic_points.reserve(deskewed_frame.size() / 8);
+            for (const auto& p : deskewed_frame) {
+              const Eigen::Vector3d p_odom = lidar_to_odom * p;
+              const Bonxai::CoordT key = lio->map.PosToCoord(p_odom);
+              const auto it = dyn_table.find(key);
+              const bool is_dynamic = it != dyn_table.end() &&
+                                      static_cast<int>(it->second.hit_count) >= min_hits &&
+                                      static_cast<double>(it->second.dyn_score) > gate;
+              if (is_dynamic) {
+                dynamic_points.push_back(p);
+              } else {
+                static_points.push_back(p);
+              }
+            }
+            frame_static_publisher->publish(utils::eigen_to_point_cloud2(static_points, header));
+            frame_dynamic_publisher->publish(utils::eigen_to_point_cloud2(dynamic_points, header));
+          }
         }
         publish_odometry(lio->lidar_state, end_stamp);
         if (publish_lidar_acceleration) {
           publish_lidar_accel(lio->lidar_state.linear_acceleration, end_stamp);
+        }
+        if (publish_map_to_odom_tf && lio->config.camera_enabled) {
+          publish_map_to_odom(end_stamp);
         }
       }
     } catch (const std::invalid_argument& ex) {
@@ -368,6 +685,20 @@ void Node::publish_odometry(const core::State& state, const core::Secondsd& stam
   utils::eigen_vector3d_to_ros_xyz(state.velocity, odom_msg.twist.twist.linear);
   utils::eigen_vector3d_to_ros_xyz(state.angular_velocity, odom_msg.twist.twist.angular);
   odom_publisher->publish(odom_msg);
+}
+
+void Node::publish_map_to_odom(const core::Secondsd& stamp) const {
+  // REP-105: `map -> odom` carries the cumulative camera-keyframe correction
+  // built up inside `LIO`. Defaults to identity until a keyframe lands, so
+  // `map` is just an alias for `odom` for any downstream consumer until the
+  // camera path produces a correction.
+  const Sophus::SE3d& delta = lio->map_to_odom();
+  geometry_msgs::msg::TransformStamped transform_msg;
+  transform_msg.header.stamp = rclcpp::Time(std::chrono::duration_cast<std::chrono::nanoseconds>(stamp).count());
+  transform_msg.header.frame_id = map_frame;
+  transform_msg.child_frame_id = odom_frame;
+  transform_msg.transform = utils::sophus_to_transform(delta);
+  tf_broadcaster->sendTransform(transform_msg);
 }
 
 void Node::publish_lidar_accel(const Eigen::Vector3d& acceleration, const core::Secondsd& stamp) const {
