@@ -144,6 +144,19 @@ class LIOConfig:
     max_expected_jerk: float = 3.0
     double_downsample: bool = True
     min_beta: float = 200.0
+    # Camera tight-coupling: the Python pipeline cannot yet ingest camera
+    # frames, so this knob is exposed for symmetry with the C++ struct and
+    # will not have an effect unless camera frames are fed in via a future
+    # Python binding.
+    camera_enabled: bool = False
+    # Dynamic-point segmentation (works end-to-end from the Python pipeline).
+    dynamic_segmentation_enabled: bool = False
+    dyn_tau_static_m: float = 0.10
+    dyn_tau_dynamic_m: float = 0.30
+    dyn_ema_alpha: float = 0.20
+    dyn_skip_map_score: float = 0.60
+    dyn_weight_decay_k: float = 4.0
+    dyn_min_hits_to_trust: int = 3
 
     def to_pybind(self) -> _LIOConfig:
         cfg = _LIOConfig()

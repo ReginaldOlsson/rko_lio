@@ -191,3 +191,28 @@ class LIO:
     def poses_with_timestamps(self):
         timestamps, poses = self._impl.poses_with_timestamps()
         return np.asarray(timestamps), poses
+
+    def map_to_odom(self) -> np.ndarray:
+        """4x4 `map -> odom` transform maintained by the camera keyframe path.
+
+        Returns identity until a camera keyframe has produced a correction.
+        Reading this is always safe; it's just the same getter the ROS layer
+        uses to broadcast the TF.
+        """
+        return np.asarray(self._impl.map_to_odom())
+
+    def voxel_dyn_scores_for_points(self, points_odom: np.ndarray) -> np.ndarray:
+        """Per-point dynamic score for points already in the odom frame.
+
+        Returns ``NaN`` where the voxel has fewer than
+        ``config.dyn_min_hits_to_trust`` hits or is not present in the side
+        table at all. Useful for colouring scan points by dyn_score in
+        Rerun. Pass ``lidar_state.pose @ extrinsic_lidar2base @ point`` to
+        convert from the original lidar frame first.
+        """
+        pts = np.asarray(points_odom, dtype=np.float64)
+        if pts.ndim != 2 or pts.shape[1] != 3:
+            raise ValueError(
+                f"points_odom: expected (N,3), got {pts.shape}"
+            )
+        return np.asarray(self._impl.voxel_dyn_scores_for_points(pts))

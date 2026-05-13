@@ -201,6 +201,12 @@ class LIOPipeline:
         if self.config.viz:
             # TODO: rerun the deskewed scan as well, but there is some flickering in the viz for some reason
             self._visualize_frame(end_time)
+            if (
+                self.lio.config.dynamic_segmentation_enabled
+                and deskewed_scan is not None
+                and deskewed_scan.size > 0
+            ):
+                self._visualize_dyn_overlay(deskewed_scan)
 
         return deskewed_scan
 
@@ -243,6 +249,52 @@ class LIOPipeline:
                     colors=height_colors_from_points(local_map_points),
                 ),
             )
+
+        map_to_odom = self.lio.map_to_odom()
+        if not np.allclose(map_to_odom, np.eye(4)):
+            self.rerun.log(
+                "world/map_to_odom",
+                self.rerun.Transform3D(
+                    translation=map_to_odom[:3, 3],
+                    mat3x3=map_to_odom[:3, :3],
+                    axis_length=1.0,
+                ),
+            )
+
+    def _visualize_dyn_overlay(self, deskewed_scan: np.ndarray):
+        """Log the deskewed scan to Rerun coloured by per-voxel `dyn_score`.
+
+        Untrusted voxels are rendered grey; static voxels green; dynamic
+        voxels red. The colour interpolates between the two extremes by
+        `dyn_score`. Camera + Canny overlays are not surfaced here because
+        the Python pipeline currently has no image-input path; rely on the
+        ROS layer (frame_static / frame_dynamic topics + map -> odom TF)
+        for the full debug visualisation.
+        """
+        pose = self.lio.pose()
+        extrinsic = (
+            self.extrinsic_lidar2base
+            if self.extrinsic_lidar2base is not None
+            else np.eye(4)
+        )
+        lidar_to_odom = pose @ extrinsic
+        homog = np.concatenate(
+            [deskewed_scan, np.ones((deskewed_scan.shape[0], 1))], axis=1
+        )
+        points_odom = (lidar_to_odom @ homog.T).T[:, :3]
+        scores = self.lio.voxel_dyn_scores_for_points(points_odom)
+        colours = np.full((points_odom.shape[0], 4), 128, dtype=np.uint8)
+        trusted = ~np.isnan(scores)
+        if np.any(trusted):
+            s = np.clip(scores[trusted], 0.0, 1.0)
+            colours[trusted, 0] = (255 * s).astype(np.uint8)
+            colours[trusted, 1] = (255 * (1.0 - s)).astype(np.uint8)
+            colours[trusted, 2] = 32
+            colours[trusted, 3] = 255
+        self.rerun.log(
+            "world/frame_dyn_colored",
+            self.rerun.Points3D(points_odom, colors=colours),
+        )
 
     def dump_results_to_disk(self):
         """

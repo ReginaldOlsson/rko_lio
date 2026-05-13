@@ -68,7 +68,19 @@ PYBIND11_MODULE(rko_lio_pybind, m) {
       .def_readwrite("initialization_phase", &LIO::Config::initialization_phase)
       .def_readwrite("max_expected_jerk", &LIO::Config::max_expected_jerk)
       .def_readwrite("double_downsample", &LIO::Config::double_downsample)
-      .def_readwrite("min_beta", &LIO::Config::min_beta);
+      .def_readwrite("min_beta", &LIO::Config::min_beta)
+      // Camera + dyn-seg config knobs. The Python pipeline does not (yet)
+      // ingest image data, so `camera_enabled` is effectively read-only from
+      // a usefulness point of view; we still expose it so the binding stays
+      // in lockstep with the C++ struct.
+      .def_readwrite("camera_enabled", &LIO::Config::camera_enabled)
+      .def_readwrite("dynamic_segmentation_enabled", &LIO::Config::dynamic_segmentation_enabled)
+      .def_readwrite("dyn_tau_static_m", &LIO::Config::dyn_tau_static_m)
+      .def_readwrite("dyn_tau_dynamic_m", &LIO::Config::dyn_tau_dynamic_m)
+      .def_readwrite("dyn_ema_alpha", &LIO::Config::dyn_ema_alpha)
+      .def_readwrite("dyn_skip_map_score", &LIO::Config::dyn_skip_map_score)
+      .def_readwrite("dyn_weight_decay_k", &LIO::Config::dyn_weight_decay_k)
+      .def_readwrite("dyn_min_hits_to_trust", &LIO::Config::dyn_min_hits_to_trust);
 
   py::class_<LIO>(m, "_LIO")
       .def(py::init<const LIO::Config&>(), "config"_a)
@@ -114,6 +126,37 @@ PYBIND11_MODULE(rko_lio_pybind, m) {
           "extrinsic_lidar2base"_a, "scan"_a, "timestamps"_a)
       .def("map_point_cloud", [](LIO& self) { return self.map.Pointcloud(); })
       .def("pose", [](LIO& self) { return self.lidar_state.pose.matrix(); })
+      .def("map_to_odom",
+           [](LIO& self) -> Eigen::Matrix4d { return self.map_to_odom().matrix(); })
+      // Returns one float per input point: `dyn_score` for the voxel that
+      // point falls into in `odom`, or NaN if the voxel is untrusted (hit
+      // count below the gate) or absent. `points_odom` must already be in
+      // the odom frame (Python visualizers should apply `lidar_state.pose *
+      // extrinsic_lidar2base` first).
+      .def(
+          "voxel_dyn_scores_for_points",
+          [](LIO& self, py::array_t<double, py::array::c_style | py::array::forcecast> points_odom) {
+            if (points_odom.ndim() != 2 || points_odom.shape(1) != 3) {
+              throw std::runtime_error("voxel_dyn_scores_for_points expects an (N,3) array.");
+            }
+            const ssize_t n = points_odom.shape(0);
+            py::array_t<float> out(n);
+            auto in_buf = points_odom.unchecked<2>();
+            auto out_buf = out.mutable_unchecked<1>();
+            const int min_hits = self.config.dyn_min_hits_to_trust;
+            for (ssize_t i = 0; i < n; ++i) {
+              const Eigen::Vector3d p(in_buf(i, 0), in_buf(i, 1), in_buf(i, 2));
+              const auto key = self.map.PosToCoord(p);
+              const auto it = self.voxel_dyn.find(key);
+              if (it == self.voxel_dyn.end() || static_cast<int>(it->second.hit_count) < min_hits) {
+                out_buf(i) = std::numeric_limits<float>::quiet_NaN();
+              } else {
+                out_buf(i) = it->second.dyn_score;
+              }
+            }
+            return out;
+          },
+          "points_odom"_a)
       .def("poses_with_timestamps",
            [](LIO& self) {
              const size_t n = self.poses_with_timestamps.size();
