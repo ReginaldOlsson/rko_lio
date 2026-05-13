@@ -31,6 +31,7 @@ compat_target_sources(
           voxel_down_sample.cpp
           process_timestamps.cpp
           preprocess_scan.cpp
+          camera_residual.cpp
   PUBLIC
   FILE_SET
   HEADERS
@@ -41,6 +42,7 @@ compat_target_sources(
         ../../rko_lio/core/sparse_voxel_grid.hpp
         ../../rko_lio/core/util.hpp
         ../../rko_lio/core/voxel_down_sample.hpp
+        ../../rko_lio/core/camera_residual.hpp
   BASE_DIRS ../..)
 
 target_link_libraries(

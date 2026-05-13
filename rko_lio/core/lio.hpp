@@ -139,6 +139,17 @@ public:
 
     /** A voxel needs at least this many hits before its `dyn_score` is trusted. */
     int dyn_min_hits_to_trust = 3;
+
+    // ---- Camera keyframe gating (Option A: map -> odom propagation) ----
+
+    /** Minimum translation (m) since the last camera keyframe before another keyframe is accepted. */
+    double camera_keyframe_motion_threshold_m = 0.5;
+
+    /** Minimum rotation (rad) since the last camera keyframe before another keyframe is accepted. */
+    double camera_keyframe_rotation_threshold_rad = 0.2;
+
+    /** Minimum wall-clock time between camera keyframes (seconds). */
+    double camera_keyframe_min_dt_s = 0.5;
   };
 
   /** Configuration parameters. */
@@ -272,5 +283,14 @@ private:
 
   /** map -> odom rigid correction (REP-105). Identity until a camera keyframe lands. */
   Sophus::SE3d _map_to_odom;
+
+  /** Most recent LIO-only pose at which a camera keyframe was accepted, used by the keyframe gate. */
+  Sophus::SE3d _last_camera_keyframe_pose;
+
+  /** Whether `_last_camera_keyframe_pose` has been initialised by an accepted keyframe. */
+  bool _last_camera_keyframe_valid = false;
+
+  /** Lidar timestamp of the most recently accepted camera keyframe. */
+  Secondsd _last_camera_keyframe_time = Secondsd{0.0};
 };
 } // namespace rko_lio::core

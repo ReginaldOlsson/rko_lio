@@ -43,6 +43,14 @@ using Vector3dVector = std::vector<Eigen::Vector3d>;
 using Secondsd = std::chrono::duration<double>;
 using TimestampVector = std::vector<Secondsd>;
 
+/**
+ * Shared linear-system tuple used by every residual block that wants to sum
+ * into the per-scan Gauss-Newton solver: (H, b, chi). The point-to-point
+ * ICP, the orientation regularization, and the camera edge-alignment blocks
+ * all produce a value of this type so the icp() loop can add them together.
+ */
+using LinearSystem = std::tuple<Eigen::Matrix6d, Eigen::Vector6d, double>;
+
 // constants and util funcs
 constexpr double square(double x) { return x * x; }
 constexpr double GRAVITY_MAG = 9.8107;

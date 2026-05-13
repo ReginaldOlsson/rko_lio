@@ -68,18 +68,29 @@ Jacobian :math:`J_i`.
 Jacobian
 ^^^^^^^^
 
-With :math:`p_b = T^{-1} p_o` the same point expressed in the base frame,
-the chain rule with left perturbation :math:`T \to \exp(\delta\xi) T` gives:
+With left perturbation :math:`T \leftarrow \exp(\delta\xi)\,T` in the odom
+frame (the same convention used by ``build_icp_linear_system`` in
+``rko_lio/core/lio.cpp``), :math:`T^{-1} \leftarrow T^{-1}\,\exp(-\delta\xi)`
+so the map point is left-multiplied by :math:`\exp(-\delta\xi)` before being
+transformed into the camera. Define
+:math:`R_{\mathrm{odom}\to\mathrm{cam}}
+= R(E^{-1})\,R(T^{-1})
+= R\!\left((T E)^{-1}\right)`.
+
+Then:
 
 .. math::
 
    \frac{\partial p_c}{\partial \delta\xi}
-   = -E^{-1}
-   \begin{bmatrix} I_{3 \times 3} & -[p_b]_\times \end{bmatrix}
+   = R_{\mathrm{odom}\to\mathrm{cam}}
+   \begin{bmatrix} -I_{3 \times 3} & [p_o]_\times \end{bmatrix}
 
 where :math:`[\cdot]_\times` is the skew-symmetric matrix and the layout is
 :math:`\delta\xi = (\delta\rho, \delta\phi)` (translation first, rotation
 second), matching the Sophus convention used in ``rko_lio/core/lio.cpp``.
+The constant translation parts of :math:`E^{-1}` and :math:`T^{-1}` drop
+out because the perturbation enters multiplicatively only on the rotation
+of :math:`T^{-1}`.
 
 The projection Jacobian for a pinhole camera is:
 

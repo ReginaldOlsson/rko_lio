@@ -23,6 +23,7 @@
  */
 
 #include "lio.hpp"
+#include "camera_residual.hpp"
 #include "preprocess_scan.hpp"
 #include "profiler.hpp"
 #include "util.hpp"
@@ -82,7 +83,6 @@ inline double dyn_weight_for_voxel(const DynWeightingContext* ctx, const Bonxai:
   return std::exp(-ctx->weight_decay_k * static_cast<double>(it->second.dyn_score));
 }
 
-using LinearSystem = std::tuple<Eigen::Matrix6d, Eigen::Vector6d, double>;
 LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
                                      const rko_lio::core::Vector3dVector& frame,
                                      const rko_lio::core::SparseVoxelGrid& voxel_map,
@@ -195,24 +195,37 @@ Sophus::SE3d icp(const Vector3dVector& frame,
                  const Sophus::SE3d& initial_guess,
                  const LIO::Config& config,
                  const std::optional<AccelInfo>& optional_accel_info,
-                 const DynWeightingContext* dyn_ctx) {
+                 const DynWeightingContext* dyn_ctx,
+                 const CameraResidualContext* camera_ctx) {
   // in case config disables it, or we don't have valid IMU information for this icp loop, beta is -1
   const double beta = (config.min_beta > 0 && optional_accel_info.has_value())
                           ? (config.min_beta * (1 + optional_accel_info->accel_mag_variance))
                           : -1;
 
+  const bool camera_active = camera_ctx != nullptr && camera_ctx->frame != nullptr &&
+                             camera_ctx->extrinsic_cam_to_base != nullptr && camera_ctx->visible != nullptr;
+
   Sophus::SE3d current_pose = initial_guess;
 
   for (size_t i = 0; i < config.max_iterations; ++i) {
     const auto& [H, b, chi] = std::invoke([&]() -> LinearSystem {
-      const auto& [H_icp, b_icp, chi_icp] =
+      auto [H_sum, b_sum, chi_sum] =
           build_icp_linear_system(current_pose, frame, voxel_map, config.max_correspondance_distance, dyn_ctx);
       if (beta >= 0) {
         const auto& [H_ori, b_ori, chi_ori] =
             build_orientation_linear_system(current_pose, optional_accel_info->local_gravity_estimate);
-        return {H_icp + H_ori / beta, b_icp + b_ori / beta, chi_icp + chi_ori / beta};
+        H_sum += H_ori / beta;
+        b_sum += b_ori / beta;
+        chi_sum += chi_ori / beta;
       }
-      return {H_icp, b_icp, chi_icp};
+      if (camera_active) {
+        const auto& [H_cam, b_cam, chi_cam] = build_camera_edge_linear_system(
+            current_pose, *camera_ctx->extrinsic_cam_to_base, *camera_ctx->frame, *camera_ctx->visible, config);
+        H_sum += H_cam;
+        b_sum += b_cam;
+        chi_sum += chi_cam;
+      }
+      return {H_sum, b_sum, chi_sum};
     });
 
     const Eigen::Vector6d dx = H.ldlt().solve(-b);
@@ -555,7 +568,12 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan, const TimestampVec
   bool ran_icp = false;
   if (!map.Empty()) {
     SCOPED_PROFILER("ICP");
-    optimized_pose = icp(preproc_result.keypoints, map, initial_guess, config, accel_filter_info, dyn_ctx_ptr);
+    // Primary ICP runs without the camera residual so the `odom -> base_link`
+    // path stays purely LIO-driven and continues to satisfy REP-105's "odom
+    // is smooth, never jumps" contract. The camera-aided pose is computed
+    // separately below at keyframes for the `map -> odom` correction.
+    optimized_pose = icp(preproc_result.keypoints, map, initial_guess, config, accel_filter_info, dyn_ctx_ptr,
+                          /*camera_ctx=*/nullptr);
     ran_icp = true;
 
     // estimate velocities and accelerations from the new pose
@@ -579,6 +597,49 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan, const TimestampVec
 
   // reset imu averages
   interval_stats.reset();
+
+  // Camera keyframe path (Option A): once the gates pass, re-run ICP starting
+  // from the LIO-only optimum with the camera residual switched in to get
+  // T_combined. The delta against T_lio_only is broadcast as `map -> odom`.
+  // The camera frame is consumed at most once per call.
+  const bool camera_gate = config.camera_enabled && _camera_extrinsic_set && _pending_camera_frame.has_value() &&
+                            ran_icp && static_cast<int>(_scan_counter) >= config.camera_warmup_scans &&
+                            _pending_camera_frame->time <= current_lidar_time;
+  bool keyframe_motion_ok = !_last_camera_keyframe_valid;
+  bool keyframe_time_ok = !_last_camera_keyframe_valid;
+  if (camera_gate && _last_camera_keyframe_valid) {
+    const Sophus::SE3d motion_since_kf = _last_camera_keyframe_pose.inverse() * optimized_pose;
+    const double translation_norm = motion_since_kf.translation().norm();
+    const double rotation_angle = motion_since_kf.so3().log().norm();
+    keyframe_motion_ok = translation_norm >= config.camera_keyframe_motion_threshold_m ||
+                         rotation_angle >= config.camera_keyframe_rotation_threshold_rad;
+    keyframe_time_ok =
+        (current_lidar_time - _last_camera_keyframe_time).count() >= config.camera_keyframe_min_dt_s;
+  }
+  if (camera_gate && keyframe_motion_ok && keyframe_time_ok) {
+    SCOPED_PROFILER("CAMERA_KEYFRAME");
+    const auto* voxel_dyn_for_camera = config.dynamic_segmentation_enabled ? &voxel_dyn : nullptr;
+    CameraVisibleSet camera_visible = compute_camera_visible_set(
+        map, optimized_pose, _extrinsic_cam2base, *_pending_camera_frame, config, voxel_dyn_for_camera);
+    if (static_cast<int>(camera_visible.points_odom.size()) >= config.camera_min_visible_points) {
+      CameraResidualContext camera_ctx{};
+      camera_ctx.frame = &(*_pending_camera_frame);
+      camera_ctx.extrinsic_cam_to_base = &_extrinsic_cam2base;
+      camera_ctx.visible = &camera_visible;
+      const Sophus::SE3d camera_optimized_pose =
+          icp(preproc_result.keypoints, map, optimized_pose, config, accel_filter_info, dyn_ctx_ptr, &camera_ctx);
+      _map_to_odom = camera_optimized_pose * optimized_pose.inverse();
+      _last_camera_keyframe_pose = optimized_pose;
+      _last_camera_keyframe_time = current_lidar_time;
+      _last_camera_keyframe_valid = true;
+    }
+  }
+  // Consume the pending frame unconditionally so we never reuse a stale image:
+  // either it was applied above, or its motion/time/visibility gates failed and
+  // we move on to the next image instead.
+  if (_pending_camera_frame.has_value() && _pending_camera_frame->time <= current_lidar_time) {
+    _pending_camera_frame.reset();
+  }
 
   // Dynamic-segmentation post-pass: learn from the converged ICP residuals
   // over the keypoints, then mask the map update with the freshly updated

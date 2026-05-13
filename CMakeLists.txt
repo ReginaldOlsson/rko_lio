@@ -37,6 +37,12 @@ find_package(Bonxai REQUIRED CONFIG)
 
 add_subdirectory(rko_lio/core)
 
+option(RKO_LIO_BUILD_TESTS "Build the standalone C++ tests for RKO LIO" OFF)
+if(RKO_LIO_BUILD_TESTS)
+  enable_testing()
+  add_subdirectory(tests/cpp)
+endif()
+
 option(RKO_LIO_BUILD_ROS "Build the ROS wrapper for RKO LIO" ON)
 
 if(NOT RKO_LIO_BUILD_ROS)
@@ -57,6 +63,12 @@ else()
   find_package(rosbag2_cpp REQUIRED CONFIG)
   find_package(rosbag2_storage REQUIRED CONFIG)
   find_package(rclcpp_components REQUIRED CONFIG)
+
+  # Camera tight-coupling deps. Only used in the ROS layer; the core stays
+  # OpenCV-free per the plan recommendation.
+  find_package(OpenCV REQUIRED COMPONENTS core imgproc calib3d)
+  find_package(image_transport REQUIRED CONFIG)
+  find_package(cv_bridge REQUIRED CONFIG)
 
   add_subdirectory(rko_lio/ros)
 
