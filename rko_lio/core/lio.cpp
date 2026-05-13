@@ -448,4 +448,17 @@ Vector3dVector LIO::register_scan(const Sophus::SE3d& extrinsic_lidar2base,
   transform_points(extrinsic_lidar2base.inverse(), frame);
   return frame;
 }
+
+// ============================ camera ===============================
+
+void LIO::set_camera_extrinsic(const Sophus::SE3d& extrinsic_cam2base) {
+  _extrinsic_cam2base = extrinsic_cam2base;
+  _camera_extrinsic_set = true;
+}
+
+void LIO::add_camera_frame(const CameraFrame& frame) {
+  // Replace the pending frame; the registration loop picks up the most recent
+  // image whose timestamp is older than the current scan's max timestamp.
+  _pending_camera_frame = frame;
+}
 } // namespace rko_lio::core

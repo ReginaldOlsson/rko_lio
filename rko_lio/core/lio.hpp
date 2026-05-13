@@ -30,7 +30,10 @@
 #pragma once
 #include "sparse_voxel_grid.hpp"
 #include "util.hpp"
+#include <bonxai/grid_coord.hpp>
 #include <optional>
+#include <unordered_map>
+#include <vector>
 
 /** Core namespace containing LIO data structures and state definitions. */
 namespace rko_lio::core {
@@ -77,6 +80,55 @@ public:
 
     /** Minimum weight for orientation regularization. */
     double min_beta = 200;
+
+    // ---- Camera tight-coupling (opt-in) ----
+
+    /** Enable the camera edge-alignment residual block inside ICP. */
+    bool camera_enabled = false;
+
+    /** Scalar weight applied to the camera linear system before summing into the GN system. */
+    double camera_weight = 1.0;
+
+    /** Huber clip on the distance-transform residual, in pixels. */
+    double camera_max_dt_residual_px = 20.0;
+
+    /** Below this count of visible projected points the camera block is skipped for the scan. */
+    int camera_min_visible_points = 200;
+
+    /** Map points closer than this distance from the camera (in m) are culled. */
+    double camera_min_point_depth_m = 0.5;
+
+    /** Optional low-resolution z-buffer occlusion test during the visible-point pre-pass. */
+    bool camera_use_occlusion_zbuf = true;
+
+    /** Z-buffer downsample factor (power-of-2 recommended) for the occlusion test. */
+    int camera_zbuf_downsample = 4;
+
+    /** Skip the camera block for the first N scans after startup so the map can populate. */
+    int camera_warmup_scans = 5;
+
+    // ---- Dynamic-point segmentation (opt-in) ----
+
+    /** Enable per-voxel dynamic statistics maintained from ICP correspondence residuals. */
+    bool dynamic_segmentation_enabled = false;
+
+    /** Residual (m) below which a correspondence is considered definitely static. */
+    double dyn_tau_static_m = 0.10;
+
+    /** Residual (m) above which a correspondence is treated as dynamic-suspicious. */
+    double dyn_tau_dynamic_m = 0.30;
+
+    /** EMA mixing factor for resid_ema and dyn_score. */
+    double dyn_ema_alpha = 0.20;
+
+    /** Voxels with `dyn_score` above this gate are skipped from `SparseVoxelGrid::Update`. */
+    double dyn_skip_map_score = 0.60;
+
+    /** Weight decay factor: w_i = exp(-k * dyn_score) for ICP weighting on the next scan. */
+    double dyn_weight_decay_k = 4.0;
+
+    /** A voxel needs at least this many hits before its `dyn_score` is trusted. */
+    int dyn_min_hits_to_trust = 3;
   };
 
   /** Configuration parameters. */
@@ -138,6 +190,40 @@ public:
   /** Sequence of registered scan poses with corresponding timestamps. */
   std::vector<std::pair<Secondsd, Sophus::SE3d>> poses_with_timestamps;
 
+  /**
+   * Register a fixed extrinsic from the camera frame to the base frame.
+   * Required before `add_camera_frame` will produce useful corrections.
+   */
+  void set_camera_extrinsic(const Sophus::SE3d& extrinsic_cam2base);
+
+  /**
+   * Submit the most recent rectified camera frame (with precomputed
+   * distance-transform image) for tight coupling into the next scan's ICP.
+   *
+   * Calling this overwrites any previously-submitted but still-unconsumed
+   * frame; the registration loop only ever uses the latest frame whose
+   * timestamp is older than the current scan's max timestamp.
+   */
+  void add_camera_frame(const CameraFrame& frame);
+
+  /**
+   * The `map -> odom` correction maintained from camera keyframes (Option A
+   * in the design doc). Identity when no camera keyframe has produced a
+   * correction yet. Always safe to read; updates are atomic from the
+   * outside-caller's point of view.
+   */
+  const Sophus::SE3d& map_to_odom() const { return _map_to_odom; }
+
+  /** Whether `set_camera_extrinsic` has been called with a non-trivial transform. */
+  bool camera_extrinsic_set() const { return _camera_extrinsic_set; }
+
+  /**
+   * Per-voxel dynamic statistics side-table, parallel to `map`. Empty unless
+   * `config.dynamic_segmentation_enabled = true`. Exposed for visualisation
+   * and downstream consumers.
+   */
+  std::unordered_map<Bonxai::CoordT, VoxelDynStats> voxel_dyn;
+
 private:
   /**
    * Initialize internal odometry state using the given lidar timestamp.
@@ -163,5 +249,18 @@ private:
 
   /** Angular velocity of last true IMU measurement expressed in base frame. */
   Eigen::Vector3d _last_real_base_imu_ang_vel = Eigen::Vector3d::Zero();
+
+  /** Fixed extrinsic from camera frame to base frame. */
+  Sophus::SE3d _extrinsic_cam2base;
+  bool _camera_extrinsic_set = false;
+
+  /** Latest camera frame submitted via `add_camera_frame`, consumed at most once. */
+  std::optional<CameraFrame> _pending_camera_frame;
+
+  /** Monotonic scan counter, used for the camera warmup gate and `last_seen_scan`. */
+  uint32_t _scan_counter = 0;
+
+  /** map -> odom rigid correction (REP-105). Identity until a camera keyframe lands. */
+  Sophus::SE3d _map_to_odom;
 };
 } // namespace rko_lio::core

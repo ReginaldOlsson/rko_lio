@@ -57,5 +57,6 @@ If you use this work, please leave a star ⭐ on our `GitHub repository <https:/
    ROS <pages/ros/ros>
    Python <pages/python/python>
    Configuring rko_lio <pages/config>
+   Camera coupling and dynamic segmentation <pages/camera_coupling>
    Uncategorised <pages/uncategorised/index>
    License <__LICENSE>

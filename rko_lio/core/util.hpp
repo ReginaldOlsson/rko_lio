@@ -25,7 +25,10 @@
 #pragma once
 #include <Eigen/Core>
 #include <chrono>
+#include <cstdint>
+#include <memory>
 #include <sophus/se3.hpp>
+#include <vector>
 
 namespace Eigen {
 using Matrix3_6d = Matrix<double, 3, 6>;
@@ -134,5 +137,60 @@ struct AccelInfo {
   /** Variance of the raw imu acceleration magnitude. */
   double accel_mag_variance;
   Eigen::Vector3d local_gravity_estimate;
+};
+
+/**
+ * Pinhole camera intrinsics for a rectified image.
+ *
+ * Distortion is expected to be removed in the ROS layer using the
+ * subscribed CameraInfo (D, K, R, P matrices); the core consumes only the
+ * rectified pinhole model.
+ */
+struct PinholeIntrinsics {
+  double fx = 0.0;
+  double fy = 0.0;
+  double cx = 0.0;
+  double cy = 0.0;
+  int width = 0;
+  int height = 0;
+};
+
+/**
+ * A camera measurement, preprocessed in the ROS (or Python) layer, ready for
+ * use by the camera edge-alignment residual.
+ *
+ * `dt_image` carries the unsigned L2 distance transform of the rectified
+ * image's Canny edges, in pixels, as a row-major contiguous float buffer of
+ * size `rows * cols`. Shared ownership keeps the buffer alive for as long
+ * as any consumer holds the frame.
+ *
+ * The core never touches OpenCV: the ROS layer is responsible for running
+ * Canny + cv::distanceTransform and producing the buffer.
+ */
+struct CameraFrame {
+  Secondsd time{0};
+  PinholeIntrinsics intrinsics;
+  std::shared_ptr<const std::vector<float>> dt_image;
+  int rows = 0;
+  int cols = 0;
+};
+
+/**
+ * Per-voxel dynamic statistics maintained as a side table parallel to the
+ * sparse voxel grid. All fields default to a "no information" state so newly
+ * observed voxels are treated as static until the EMA settles. Only updated
+ * when `LIO::Config::dynamic_segmentation_enabled` is true.
+ */
+struct VoxelDynStats {
+  /** EMA of the mean correspondence residual to this voxel, in meters. */
+  float resid_ema = 0.0f;
+  /** EMA of the dynamic indicator `1[r > tau_dynamic || rejected]`. */
+  float dyn_score = 0.0f;
+  /** Number of scans in which this voxel participated as a correspondence. */
+  uint16_t hit_count = 0;
+  /** Reserved for future visibility-based dynamic carving. */
+  uint16_t miss_count = 0;
+  /** Scan counter at the most recent telemetry update for this voxel. */
+  uint32_t last_seen_scan = 0;
 };
 }; // namespace rko_lio::core
