@@ -32,6 +32,7 @@
 #include <tbb/blocked_range.h>
 #include <tbb/concurrent_vector.h>
 #include <tbb/global_control.h>
+#include <tbb/parallel_for.h>
 #include <tbb/parallel_reduce.h>
 #include <tbb/task_arena.h>
 // stl
@@ -50,11 +51,43 @@ inline void transform_points(const Sophus::SE3d& T, Vector3dVector& points) {
   std::transform(points.begin(), points.end(), points.begin(), [&](const auto& point) { return T * point; });
 }
 
+/**
+ * Optional read-only context used inside ICP to apply a per-correspondence
+ * weight `w_i = exp(-decay_k * dyn_score)` when dynamic-point segmentation
+ * is enabled. When the context pointer is null, the ICP solver behaves
+ * identically to the unmodified core.
+ *
+ * Reading from the side table during the parallel reduce is safe because
+ * the table is only written once per scan, sequentially, after the ICP
+ * loop exits.
+ */
+struct DynWeightingContext {
+  const std::unordered_map<Bonxai::CoordT, VoxelDynStats>* voxel_dyn = nullptr;
+  double weight_decay_k = 0.0;
+  int min_hits_to_trust = 0;
+};
+
+/** w_i = exp(-decay_k * dyn_score) once a voxel has enough hits to be trusted. */
+inline double dyn_weight_for_voxel(const DynWeightingContext* ctx, const Bonxai::CoordT& key) {
+  if (ctx == nullptr || ctx->voxel_dyn == nullptr) {
+    return 1.0;
+  }
+  const auto it = ctx->voxel_dyn->find(key);
+  if (it == ctx->voxel_dyn->end()) {
+    return 1.0;
+  }
+  if (static_cast<int>(it->second.hit_count) < ctx->min_hits_to_trust) {
+    return 1.0;
+  }
+  return std::exp(-ctx->weight_decay_k * static_cast<double>(it->second.dyn_score));
+}
+
 using LinearSystem = std::tuple<Eigen::Matrix6d, Eigen::Vector6d, double>;
 LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
                                      const rko_lio::core::Vector3dVector& frame,
                                      const rko_lio::core::SparseVoxelGrid& voxel_map,
-                                     const double& max_correspondance_distance) {
+                                     const double& max_correspondance_distance,
+                                     const DynWeightingContext* dyn_ctx = nullptr) {
   auto linear_system_reduce = [](LinearSystem lhs, const LinearSystem& rhs) {
     auto& [lhs_H, lhs_b, lhs_chi] = lhs;
     const auto& [rhs_H, rhs_b, rhs_chi] = rhs;
@@ -64,14 +97,14 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
     return lhs;
   };
 
-  auto linear_system_for_one_point = [](const Eigen::Vector3d& source, const Eigen::Vector3d& target) {
+  auto linear_system_for_one_point = [](const Eigen::Vector3d& source, const Eigen::Vector3d& target, double weight) {
     Eigen::Matrix3_6d J_r;
     J_r.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity();
     J_r.block<3, 3>(0, 3) = -1.0 * Sophus::SO3d::hat(source);
     const Eigen::Vector3d residual = source - target;
-    return LinearSystem(J_r.transpose() * J_r,      // JTJ
-                        J_r.transpose() * residual, // JTr
-                        residual.squaredNorm());    // chi
+    return LinearSystem(weight * J_r.transpose() * J_r,      // w * JTJ
+                        weight * J_r.transpose() * residual, // w * JTr
+                        weight * residual.squaredNorm());    // w * chi (for diagnostics)
   };
 
   // The only parallel part
@@ -87,10 +120,11 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
         return std::transform_reduce(r.begin(), r.end(), J, linear_system_reduce, [&](const auto& point) {
           // Compute data association and linear system
           const Eigen::Vector3d transformed_point = current_pose * point;
-          const auto& [closest_neighbor, distance] = voxel_map.GetClosestNeighbor(transformed_point);
+          const auto& [closest_neighbor, distance, voxel_key] = voxel_map.GetClosestNeighbor(transformed_point);
           if (distance < max_correspondance_distance) {
             correspondances_counter++;
-            return linear_system_for_one_point(transformed_point, closest_neighbor);
+            const double w = dyn_weight_for_voxel(dyn_ctx, voxel_key);
+            return linear_system_for_one_point(transformed_point, closest_neighbor, w);
           }
           // TODO (meher): additional 0 add flops, which may hurt single threaded perf slightly
           return LinearSystem(Eigen::Matrix6d::Zero(), Eigen::Vector6d::Zero(), 0.0);
@@ -104,6 +138,43 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
   }
 
   return {H_icp / correspondances_counter, b_icp / correspondances_counter, 0.5 * chi_icp};
+}
+
+/**
+ * Per-correspondence telemetry record used by the dynamic-segmentation
+ * post-pass. Collected once per scan, after the ICP loop has converged,
+ * so the EMA in `voxel_dyn` is updated using residuals at the final pose
+ * estimate.
+ */
+struct CorrespondenceTelemetry {
+  Bonxai::CoordT voxel_key{0, 0, 0};
+  float residual_m = 0.f;
+  bool accepted = false; // matched within `max_correspondance_distance`
+  bool valid = false;    // false when the scan point has no neighbor at all
+};
+
+std::vector<CorrespondenceTelemetry> collect_icp_telemetry(const Sophus::SE3d& final_pose,
+                                                            const Vector3dVector& frame,
+                                                            const SparseVoxelGrid& voxel_map,
+                                                            double max_correspondance_distance) {
+  std::vector<CorrespondenceTelemetry> telemetry(frame.size());
+
+  tbb::parallel_for(tbb::blocked_range<size_t>(0, frame.size()), [&](const tbb::blocked_range<size_t>& r) {
+    for (size_t i = r.begin(); i != r.end(); ++i) {
+      const Eigen::Vector3d transformed_point = final_pose * frame[i];
+      const auto& [closest_neighbor, distance, voxel_key] = voxel_map.GetClosestNeighbor(transformed_point);
+      if (distance == std::numeric_limits<double>::max()) {
+        telemetry[i] = {.voxel_key = {0, 0, 0}, .residual_m = 0.f, .accepted = false, .valid = false};
+      } else {
+        telemetry[i] = {.voxel_key = voxel_key,
+                        .residual_m = static_cast<float>(distance),
+                        .accepted = distance < max_correspondance_distance,
+                        .valid = true};
+      }
+    }
+  });
+
+  return telemetry;
 }
 
 LinearSystem build_orientation_linear_system(const Sophus::SE3d& current_pose,
@@ -123,7 +194,8 @@ Sophus::SE3d icp(const Vector3dVector& frame,
                  const SparseVoxelGrid& voxel_map,
                  const Sophus::SE3d& initial_guess,
                  const LIO::Config& config,
-                 const std::optional<AccelInfo>& optional_accel_info) {
+                 const std::optional<AccelInfo>& optional_accel_info,
+                 const DynWeightingContext* dyn_ctx) {
   // in case config disables it, or we don't have valid IMU information for this icp loop, beta is -1
   const double beta = (config.min_beta > 0 && optional_accel_info.has_value())
                           ? (config.min_beta * (1 + optional_accel_info->accel_mag_variance))
@@ -134,7 +206,7 @@ Sophus::SE3d icp(const Vector3dVector& frame,
   for (size_t i = 0; i < config.max_iterations; ++i) {
     const auto& [H, b, chi] = std::invoke([&]() -> LinearSystem {
       const auto& [H_icp, b_icp, chi_icp] =
-          build_icp_linear_system(current_pose, frame, voxel_map, config.max_correspondance_distance);
+          build_icp_linear_system(current_pose, frame, voxel_map, config.max_correspondance_distance, dyn_ctx);
       if (beta >= 0) {
         const auto& [H_ori, b_ori, chi_ori] =
             build_orientation_linear_system(current_pose, optional_accel_info->local_gravity_estimate);
@@ -154,6 +226,75 @@ Sophus::SE3d icp(const Vector3dVector& frame,
     }
   }
   return current_pose;
+}
+
+/**
+ * Update the per-voxel dynamic-segmentation side table using the telemetry
+ * collected at the converged pose. Mutates `voxel_dyn` in place.
+ *
+ * The EMA mixing factor is `dyn_ema_alpha`. The dynamic indicator fires when
+ * the residual exceeds `dyn_tau_dynamic_m`, or when the correspondence was
+ * rejected by the `max_correspondance_distance` gate (which also counts as
+ * "dynamic-suspicious").
+ */
+void update_voxel_dyn_stats(std::unordered_map<Bonxai::CoordT, VoxelDynStats>& voxel_dyn,
+                            const std::vector<CorrespondenceTelemetry>& telemetry,
+                            const LIO::Config& config,
+                            uint32_t scan_counter) {
+  const double alpha = config.dyn_ema_alpha;
+  const double one_minus_alpha = 1.0 - alpha;
+  const double tau_dyn = config.dyn_tau_dynamic_m;
+
+  for (const auto& t : telemetry) {
+    if (!t.valid) {
+      continue;
+    }
+    auto& stats = voxel_dyn[t.voxel_key];
+    const bool is_dynamic_evidence = !t.accepted || (t.residual_m > tau_dyn);
+    stats.resid_ema =
+        static_cast<float>(one_minus_alpha * static_cast<double>(stats.resid_ema) + alpha * t.residual_m);
+    stats.dyn_score = static_cast<float>(one_minus_alpha * static_cast<double>(stats.dyn_score) +
+                                         alpha * (is_dynamic_evidence ? 1.0 : 0.0));
+    if (stats.hit_count < std::numeric_limits<uint16_t>::max()) {
+      ++stats.hit_count;
+    }
+    stats.last_seen_scan = scan_counter;
+  }
+}
+
+/**
+ * Build an `accept_mask` for `SparseVoxelGrid::Update`: scan points whose
+ * target voxel has a trusted `dyn_score > dyn_skip_map_score` are excluded
+ * so dynamic returns do not pollute the map.
+ *
+ * Operates on the *map-update* point set (not the ICP keypoint set), since
+ * those are the points actually added to the map. The voxel each point
+ * would land in is derived from `pose * point`. Untrusted voxels
+ * (`hit_count` below the gate) default to "accept" so newly observed
+ * surfaces are not blocked from joining the map.
+ */
+std::vector<uint8_t> build_map_accept_mask(const Vector3dVector& map_update_points,
+                                           const Sophus::SE3d& pose,
+                                           const SparseVoxelGrid& voxel_map,
+                                           const std::unordered_map<Bonxai::CoordT, VoxelDynStats>& voxel_dyn,
+                                           const LIO::Config& config) {
+  std::vector<uint8_t> mask(map_update_points.size(), 1);
+  const double gate = config.dyn_skip_map_score;
+  const int min_hits = config.dyn_min_hits_to_trust;
+  for (size_t i = 0; i < map_update_points.size(); ++i) {
+    const Bonxai::CoordT key = voxel_map.PosToCoord(pose * map_update_points[i]);
+    const auto it = voxel_dyn.find(key);
+    if (it == voxel_dyn.end()) {
+      continue;
+    }
+    if (static_cast<int>(it->second.hit_count) < min_hits) {
+      continue;
+    }
+    if (static_cast<double>(it->second.dyn_score) > gate) {
+      mask[i] = 0;
+    }
+  }
+  return mask;
 }
 
 inline Sophus::SO3d align_accel_to_z_world(const Eigen::Vector3d& accel) {
@@ -402,9 +543,20 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan, const TimestampVec
     throw std::invalid_argument(error_msg);
   }
 
+  // Optional dynamic-segmentation weighting context for ICP. Reading from
+  // voxel_dyn during the parallel reduce is safe because we only write to it
+  // after the loop exits, sequentially in this same thread.
+  const DynWeightingContext dyn_ctx_storage = {.voxel_dyn = &voxel_dyn,
+                                                .weight_decay_k = config.dyn_weight_decay_k,
+                                                .min_hits_to_trust = config.dyn_min_hits_to_trust};
+  const DynWeightingContext* dyn_ctx_ptr = config.dynamic_segmentation_enabled ? &dyn_ctx_storage : nullptr;
+
+  Sophus::SE3d optimized_pose = initial_guess;
+  bool ran_icp = false;
   if (!map.Empty()) {
     SCOPED_PROFILER("ICP");
-    const Sophus::SE3d optimized_pose = icp(preproc_result.keypoints, map, initial_guess, config, accel_filter_info);
+    optimized_pose = icp(preproc_result.keypoints, map, initial_guess, config, accel_filter_info, dyn_ctx_ptr);
+    ran_icp = true;
 
     // estimate velocities and accelerations from the new pose
     const double dt = (current_lidar_time - lidar_state.time).count();
@@ -428,7 +580,21 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan, const TimestampVec
   // reset imu averages
   interval_stats.reset();
 
-  map.Update(preproc_result.map_update_frame(), lidar_state.pose);
+  // Dynamic-segmentation post-pass: learn from the converged ICP residuals
+  // over the keypoints, then mask the map update with the freshly updated
+  // dyn_score so we never add dynamic returns to the map.
+  ++_scan_counter;
+  const auto& map_update_frame = preproc_result.map_update_frame();
+  if (config.dynamic_segmentation_enabled && ran_icp && !map.Empty()) {
+    SCOPED_PROFILER("DYN_SEGMENTATION");
+    const auto telemetry =
+        collect_icp_telemetry(optimized_pose, preproc_result.keypoints, map, config.max_correspondance_distance);
+    update_voxel_dyn_stats(voxel_dyn, telemetry, config, _scan_counter);
+    const auto accept_mask = build_map_accept_mask(map_update_frame, lidar_state.pose, map, voxel_dyn, config);
+    map.Update(map_update_frame, accept_mask, lidar_state.pose);
+  } else {
+    map.Update(map_update_frame, lidar_state.pose);
+  }
 
   poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
 

@@ -37,6 +37,16 @@
 
 /** Core namespace containing LIO data structures and state definitions. */
 namespace rko_lio::core {
+
+/**
+ * Hash functor for `Bonxai::CoordT`, used to key the `LIO::voxel_dyn` side
+ * table. Bonxai itself provides a `std::hash<Bonxai::CoordT>` specialization
+ * (see `bonxai/grid_coord.hpp`); aliasing it here lets the call sites be
+ * explicit about which hash they depend on so the plan's contract is
+ * preserved if upstream ever drops the specialization.
+ */
+using CoordTHash = std::hash<Bonxai::CoordT>;
+
 /** Core LiDAR-inertial odometry algorithm class. */
 class LIO {
 public:
@@ -222,7 +232,7 @@ public:
    * `config.dynamic_segmentation_enabled = true`. Exposed for visualisation
    * and downstream consumers.
    */
-  std::unordered_map<Bonxai::CoordT, VoxelDynStats> voxel_dyn;
+  std::unordered_map<Bonxai::CoordT, VoxelDynStats, CoordTHash> voxel_dyn;
 
 private:
   /**

@@ -24,7 +24,9 @@
 #pragma once
 #include <Eigen/Core>
 #include <bonxai/bonxai.hpp>
+#include <cstdint>
 #include <sophus/se3.hpp>
+#include <vector>
 
 namespace rko_lio::core {
 
@@ -38,10 +40,24 @@ struct SparseVoxelGrid {
   void Clear() { map_.clear(Bonxai::ClearOption::CLEAR_MEMORY); }
   bool Empty() const { return map_.activeCellsCount() == 0; }
   void Update(const std::vector<Eigen::Vector3d>& points, const Sophus::SE3d& pose);
+  /**
+   * Mask-aware Update: every scan point in `points` whose corresponding
+   * `accept_mask` entry is false is excluded from `AddPoints`. Useful for
+   * dynamic-point segmentation, where we want to keep the existing
+   * "far away" pruning but skip adding scan points that fell on
+   * dynamic voxels.
+   */
+  void Update(const std::vector<Eigen::Vector3d>& points,
+              const std::vector<uint8_t>& accept_mask,
+              const Sophus::SE3d& pose);
   void AddPoints(const std::vector<Eigen::Vector3d>& points);
   void RemovePointsFarFromLocation(const Eigen::Vector3d& origin);
   std::vector<Eigen::Vector3d> Pointcloud() const;
-  std::tuple<Eigen::Vector3d, double> GetClosestNeighbor(const Eigen::Vector3d& query) const;
+  /** Return (closest_neighbor_position, distance, voxel_key_of_neighbor). */
+  std::tuple<Eigen::Vector3d, double, Bonxai::CoordT> GetClosestNeighbor(const Eigen::Vector3d& query) const;
+
+  /** Convenience accessor used by callers that need the voxel key of an absolute position. */
+  Bonxai::CoordT PosToCoord(const Eigen::Vector3d& pos) const { return map_.posToCoord(pos); }
 
   double voxel_size_;
   double clipping_distance_;

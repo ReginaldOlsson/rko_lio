@@ -62,9 +62,11 @@ SparseVoxelGrid::SparseVoxelGrid(const double voxel_size,
       map_(voxel_size, inner_grid_log2_dim, leaf_grid_log2_dim),
       accessor_(map_.createAccessor()) {}
 
-std::tuple<Eigen::Vector3d, double> SparseVoxelGrid::GetClosestNeighbor(const Eigen::Vector3d& query) const {
+std::tuple<Eigen::Vector3d, double, Bonxai::CoordT>
+SparseVoxelGrid::GetClosestNeighbor(const Eigen::Vector3d& query) const {
   Eigen::Vector3d closest_neighbor = Eigen::Vector3d::Zero();
   double closest_distance = std::numeric_limits<double>::max();
+  Bonxai::CoordT closest_voxel{0, 0, 0};
   const auto const_accessor = map_.createConstAccessor();
   const Bonxai::CoordT voxel = map_.posToCoord(query);
   std::for_each(shifts.cbegin(), shifts.cend(), [&](const Bonxai::CoordT& voxel_shift) {
@@ -79,10 +81,11 @@ std::tuple<Eigen::Vector3d, double> SparseVoxelGrid::GetClosestNeighbor(const Ei
       if (distance < closest_distance) {
         closest_neighbor = neighbor;
         closest_distance = distance;
+        closest_voxel = query_voxel;
       }
     }
   });
-  return std::make_tuple(closest_neighbor, closest_distance);
+  return std::make_tuple(closest_neighbor, closest_distance, closest_voxel);
 }
 
 void SparseVoxelGrid::AddPoints(const std::vector<Eigen::Vector3d>& points) {
@@ -130,6 +133,25 @@ void SparseVoxelGrid::Update(const std::vector<Eigen::Vector3d>& points, const S
                  [&](const auto& point) { return pose * point; });
   const Eigen::Vector3d& origin = pose.translation();
   AddPoints(points_transformed);
+  RemovePointsFarFromLocation(origin);
+}
+
+void SparseVoxelGrid::Update(const std::vector<Eigen::Vector3d>& points,
+                             const std::vector<uint8_t>& accept_mask,
+                             const Sophus::SE3d& pose) {
+  if (accept_mask.size() != points.size()) {
+    Update(points, pose);
+    return;
+  }
+  std::vector<Eigen::Vector3d> filtered;
+  filtered.reserve(points.size());
+  for (size_t i = 0; i < points.size(); ++i) {
+    if (accept_mask[i] != 0) {
+      filtered.emplace_back(pose * points[i]);
+    }
+  }
+  const Eigen::Vector3d& origin = pose.translation();
+  AddPoints(filtered);
   RemovePointsFarFromLocation(origin);
 }
 
