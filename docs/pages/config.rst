@@ -117,3 +117,11 @@ The physical units are always SI units.
   The default should be fine for most cases.
 
   You can set it ``-1`` to disable this additional cost.
+
+Camera coupling and dynamic segmentation
+----------------------------------------
+
+Optional monocular camera edge alignment, ``map -> odom`` propagation, and
+per-voxel dynamic point statistics are documented (including architecture
+figures) in :doc:`./camera_coupling`. Defaults keep both features disabled so
+the odometry path matches the historical behavior.

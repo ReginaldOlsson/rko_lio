@@ -28,3 +28,10 @@ These are **required parameters**. But if the dataloader can provide the extrins
 
 .. warning::
   If your dataloader provides extrinsics, but you specify them in a config, the config values *will* take priority.
+
+The Python bindings mirror the new ``LIO::Config`` fields for camera coupling
+and dynamic segmentation (``camera_*``, ``dyn_*``). When dynamic segmentation
+is enabled, the optional Rerun visualizer can color the deskewed scan by
+per-voxel ``dyn_score`` and log ``map_to_odom()`` once it becomes non-identity.
+There is currently no first-class image ingestion path in the Python pipeline;
+use the ROS node for full camera preprocessing. See :doc:`../camera_coupling`.

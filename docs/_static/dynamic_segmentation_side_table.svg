@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="400" viewBox="0 0 900 400">
+  <defs>
+    <marker id="m" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#14532d"/>
+    </marker>
+  </defs>
+  <text x="450" y="32" text-anchor="middle" fill="#14532d" font-family="sans-serif" font-size="15" font-weight="bold">Dynamic segmentation: voxel side table (parallel to SparseVoxelGrid)</text>
+
+  <rect x="60" y="70" width="240" height="100" rx="10" ry="10" fill="#f1f5f9" stroke="#334155" stroke-width="2"/>
+  <text x="180" y="102" text-anchor="middle" fill="#14532d" font-family="sans-serif" font-size="15" font-weight="bold">SparseVoxelGrid</text>
+  <text x="180" y="126" text-anchor="middle" fill="#1e293b" font-family="sans-serif" font-size="13">Bonxai voxels to 3D points</text>
+  <text x="180" y="150" text-anchor="middle" fill="#475569" font-family="sans-serif" font-size="12">GetClosestNeighbor: point, dist, key</text>
+
+  <rect x="360" y="70" width="260" height="100" rx="10" ry="10" fill="#f0fdf4" stroke="#166534" stroke-width="2"/>
+  <text x="490" y="100" text-anchor="middle" fill="#14532d" font-family="sans-serif" font-size="14" font-weight="bold">unordered_map&lt;CoordT, VoxelDynStats&gt;</text>
+  <text x="490" y="124" text-anchor="middle" fill="#1e293b" font-family="sans-serif" font-size="13">resid_ema, dyn_score, hit_count, ...</text>
+  <text x="490" y="148" text-anchor="middle" fill="#475569" font-family="sans-serif" font-size="12">Updated once per scan after primary ICP</text>
+
+  <line x1="300" y1="120" x2="360" y2="120" stroke="#14532d" stroke-width="2" marker-end="url(#m)"/>
+  <text x="330" y="108" fill="#475569" font-family="sans-serif" font-size="12">voxel key</text>
+
+  <rect x="680" y="70" width="160" height="100" rx="10" ry="10" fill="#f0fdf4" stroke="#166534" stroke-width="2"/>
+  <text x="760" y="102" text-anchor="middle" fill="#14532d" font-family="sans-serif" font-size="15" font-weight="bold">Next scan</text>
+  <text x="760" y="126" text-anchor="middle" fill="#1e293b" font-family="sans-serif" font-size="13">ICP weight lookup</text>
+  <text x="760" y="150" text-anchor="middle" fill="#475569" font-family="sans-serif" font-size="12">w = exp(-k * dyn_score)</text>
+
+  <line x1="620" y1="120" x2="680" y2="120" stroke="#14532d" stroke-width="2" marker-end="url(#m)"/>
+
+  <rect x="120" y="230" width="660" height="130" rx="10" ry="10" fill="#f1f5f9" stroke="#334155" stroke-width="2"/>
+  <text x="450" y="262" text-anchor="middle" fill="#0f172a" font-family="sans-serif" font-size="15" font-weight="bold">Post-pass (after lidar_state.pose is fixed)</text>
+  <text x="450" y="288" text-anchor="middle" fill="#1e293b" font-family="sans-serif" font-size="13">Per keypoint: residual = norm(T*p - neighbor); accepted if dist &lt; max_correspondance_distance</text>
+  <text x="450" y="312" text-anchor="middle" fill="#475569" font-family="sans-serif" font-size="12">EMA on dyn_score from reject or residual &gt; tau_dyn</text>
+  <text x="450" y="336" text-anchor="middle" fill="#475569" font-family="sans-serif" font-size="12">Map update masks points in trusted voxels with dyn_score &gt; gate</text>
+</svg>

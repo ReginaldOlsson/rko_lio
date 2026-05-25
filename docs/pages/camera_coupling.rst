@@ -1,17 +1,85 @@
 Camera tight coupling and dynamic-point segmentation
 =====================================================
 
-This page derives the two opt-in additions to the core LIO pipeline that share
-plumbing in :doc:`./core` ``icp(...)``:
+This page documents and derives the two **opt-in** additions to the core LIO
+pipeline. They can be enabled independently or together. Defaults keep the
+published odometry path unchanged.
 
-1. A camera **edge-alignment residual** that is summed into the per-scan
-   Gauss-Newton system alongside the existing ICP residual.
-2. A per-voxel **dynamic-point statistic** that is updated from the same ICP
-   residuals and used to clean the map, downweight bad correspondences, and
-   mask out dynamic regions from the camera projection.
+What is implemented (summary)
+-------------------------------
 
-Both features default to **off** so the bit-for-bit behavior of the published
-RKO-LIO odometry is preserved unless they are explicitly enabled.
+**Camera (monocular edge alignment)**
+
+- ROS receives ``sensor_msgs/Image`` + ``CameraInfo``, rectifies, runs Canny +
+  ``cv::distanceTransform``, and forwards a ``CameraFrame`` (float DT buffer +
+  intrinsics + stamp) into ``LIO::add_camera_frame``.
+- **Primary** scan registration still runs ``icp`` **without** the camera block
+  so ``odom -> base_link`` stays purely LiDAR–inertial and smooth (REP-105).
+- On **camera keyframes** (motion / rotation / time gates + minimum visible
+  projected map points), a **second** ``icp`` is started from the LIO optimum
+  with the camera residual enabled. The rigid correction
+  :math:`T_{\mathrm{cam}} T_{\mathrm{lio}}^{-1}` is stored as ``map -> odom``.
+- Core stays **OpenCV-free**; only the ROS node links OpenCV.
+
+**Dynamic-point segmentation**
+
+- After the primary ICP converges, ``collect_icp_telemetry`` walks all
+  keypoints at the final pose and records per-voxel residuals / acceptance.
+- A side ``std::unordered_map<Bonxai::CoordT, VoxelDynStats>`` (owned by
+  ``LIO``, parallel to the voxel grid) is updated with EMA statistics.
+- Next-scan ICP downweights correspondences whose voxels have high
+  ``dyn_score``; ``SparseVoxelGrid::Update`` can mask out dynamic returns from
+  entering the map; the camera visible-set pass skips high-``dyn_score`` voxels.
+- Optional ROS split of the deskewed scan into static / dynamic topics.
+
+Architecture figures
+--------------------
+
+The diagrams below are SVG files in ``docs/_static/``. They are written as
+**strict XML** (ASCII text, no raw ``&`` characters, inline attributes only) so
+desktop image viewers, browsers, and Sphinx can open them reliably.
+
+.. figure:: ../_static/camera_dyn_ros_dataflow.svg
+   :align: center
+   :width: 100%
+   :alt: ROS node pulls LiDAR, IMU, and optional camera; preprocess feeds LIO
+
+   Sensor ingress: LiDAR and IMU always drive ``register_scan``; the camera path
+   preprocesses edges in the ROS layer and hands a compact buffer to core.
+
+.. figure:: ../_static/register_scan_dual_icp.svg
+   :align: center
+   :width: 100%
+   :alt: Primary ICP without camera, optional second ICP with camera at keyframes, then dynamic telemetry
+
+   Per-scan ordering inside ``LIO::register_scan``: primary ICP updates state;
+   optional keyframe ICP updates ``map -> odom``; dynamic telemetry runs after
+   pose is fixed and gates ``map.Update``.
+
+.. figure:: ../_static/rep105_tf_tree.svg
+   :align: center
+   :width: 70%
+   :alt: map to odom to base_link TF chain
+
+   REP-105 style split: ``odom -> base_link`` is smooth LIO; ``map -> odom``
+   absorbs camera corrections at keyframes.
+
+.. figure:: ../_static/icp_gauss_newton_blocks.svg
+   :align: center
+   :width: 100%
+   :alt: H blocks summed inside icp when camera is active
+
+   Gauss–Newton iteration inside ``icp`` when ``camera_ctx`` is non-null (only
+   the keyframe solve). The primary scan ICP omits the yellow block entirely.
+
+.. figure:: ../_static/dynamic_segmentation_side_table.svg
+   :align: center
+   :width: 100%
+   :alt: Voxel map and side table for dynamic stats feeding next scan
+
+   Dynamic statistics live beside the map; telemetry is collected **after** the
+   primary ICP pose is known, then fed into the next scan's weighting and map
+   insertion mask.
 
 Conventions
 -----------
@@ -147,18 +215,30 @@ is disabled for this scan (yields ``H = 0, b = 0``).
 Integration with ICP
 ^^^^^^^^^^^^^^^^^^^^
 
-Inside ``icp(...)`` the per-iteration update becomes::
+Inside ``icp(...)`` each Gauss–Newton iteration sums the same blocks as today,
+plus the camera block **only when** ``camera_ctx`` is fully populated::
 
-   auto [H_icp, b_icp, chi_icp] = build_icp_linear_system(...);
-   auto [H_cam, b_cam, chi_cam] = build_camera_edge_linear_system(...);
+   auto [H_icp, b_icp, chi_icp] = build_icp_linear_system(..., dyn_ctx);
    auto [H_ori, b_ori, chi_ori] = build_orientation_linear_system(...);
+   H = H_icp + H_ori / beta;
+   b = b_icp + b_ori / beta;
+   if (camera_active) {
+     auto [H_cam, b_cam, chi_cam] = build_camera_edge_linear_system(...);
+     H += H_cam;
+     b += b_cam;
+   }
 
-   H = H_icp + H_cam + H_ori / beta;
-   b = b_icp + b_cam + b_ori / beta;
+**Primary scan registration** passes ``camera_ctx = nullptr``, so the camera
+lines never run and the solver matches the historical RKO-LIO behavior.
 
-This is the same pattern that ``build_orientation_linear_system`` already
-uses (see ``rko_lio/core/lio.cpp``). Each block is independently normalized
-in its own builder so there are no scaling surprises.
+**Keyframe registration** reuses the same ``icp`` entry point with
+``camera_ctx`` wired to the precomputed visible set and distance-transform
+image. That second solve starts from the LIO-only optimum and is what
+produces the ``map -> odom`` delta described below.
+
+Dynamic weighting (when ``dynamic_segmentation_enabled``) is applied inside
+``build_icp_linear_system`` via an optional ``DynWeightingContext`` pointer;
+when null, per-point weights are identically one.
 
 Visible-point culling
 ^^^^^^^^^^^^^^^^^^^^^
@@ -180,11 +260,15 @@ Gauss-Newton iterations of the current scan.
 Dynamic-point segmentation
 --------------------------
 
-The same final-iteration correspondences that build the ICP system also feed
-a per-voxel dynamic statistic. ICP converges globally on a single 6-DoF pose,
-so "non-converging voxels" is reframed as **voxels whose correspondences end
-the ICP loop with high residual or are rejected by the** ``max_correspondance_distance``
-gate.
+ICP converges globally on a single 6-DoF pose, so there is no literal
+"per-voxel convergence". Instead we use **post-convergence telemetry**: once the
+primary ICP has finished, ``collect_icp_telemetry`` evaluates every keypoint at
+the final pose and records distance to the closest map neighbor plus whether
+that neighbor was inside ``max_correspondance_distance``. High residuals or
+rejected matches are treated as evidence that the **map voxel** associated with
+the neighbor is dynamic-prone. This matches the intuition "static structure
+explains the scan; moving structure does not" without claiming per-voxel ICP
+iterates on its own.
 
 Side-table layout
 ^^^^^^^^^^^^^^^^^
@@ -210,10 +294,9 @@ This is owned by ``LIO`` and updated only when
 EMA update
 ^^^^^^^^^^
 
-For each correspondence captured on the final ICP iteration with residual
-:math:`r_i` and "accepted" flag :math:`a_i` (true iff
-:math:`r_i <` ``max_correspondance_distance``), the matched voxel's stats
-are updated as:
+For each telemetry row with residual :math:`r_i` and "accepted" flag
+:math:`a_i` (true iff the neighbor distance is below
+``max_correspondance_distance``), the matched voxel's stats are updated as:
 
 .. math::
 
@@ -246,8 +329,8 @@ In priority order:
 3. **Camera mask**: in the visible-point pre-pass for the camera residual,
    drop voxels whose ``dyn_score > dyn_skip_map_score``. Keeps moving cars
    and pedestrians out of the camera alignment.
-4. **Publishing**: optionally split ``rko_lio/frame`` into
-   ``rko_lio/frame_static`` and ``rko_lio/frame_dynamic``.
+4. **Publishing**: optionally split the deskewed scan into separate topics when
+   ``publish_dynamic_split`` is true (see :doc:`./ros/usage`).
 
 Limitations
 ^^^^^^^^^^^
@@ -265,18 +348,20 @@ Limitations
 Map-frame correction propagation
 --------------------------------
 
-When camera keyframes are enabled, the corrected pose at the keyframe time
-:math:`t_n` is converted into a delta in the odom frame:
+When a camera keyframe is accepted, the second ICP optimum
+:math:`T_{\mathrm{cam}}` (with camera residual) is compared to the LIO-only
+optimum :math:`T_{\mathrm{lio}}` at the **same** scan:
 
 .. math::
 
-   \Delta T_n = T^*(t_n) \cdot T_{\mathrm{lio}}(t_n)^{-1}
+   \Delta T = T_{\mathrm{cam}} \cdot T_{\mathrm{lio}}^{-1}
 
-This delta is published as the ``map -> odom`` TF (REP-105). The
-``odom -> base_link`` chain remains exactly the raw LIO output (smooth,
-never jumps); ``map -> base_link`` inherits the camera correction via TF
-composition. Because the RKO-LIO local map lives in ``odom`` and never
-moves, the camera correction does not invalidate any stored map points.
+``LIO`` stores :math:`\Delta T` as ``map_to_odom()`` and the ROS node may
+broadcast it as ``map -> odom`` (REP-105). The ``odom -> base_link`` chain
+remains exactly the primary LiDAR output (smooth, never jumps);
+``map -> base_link`` inherits the camera correction via TF composition. The
+local voxel map stays expressed in ``odom``; we do not warp stored points when
+:math:`\Delta T` updates.
 
 Config keys
 -----------

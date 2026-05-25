@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="420" viewBox="0 0 920 420">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#333333"/>
+    </marker>
+  </defs>
+  <text x="460" y="34" text-anchor="middle" fill="#0f172a" font-family="sans-serif" font-size="16" font-weight="bold">ROS node: sensor ingress and optional camera preprocessing</text>
+
+  <rect x="40" y="70" width="160" height="88" rx="8" ry="8" fill="#f5f7fa" stroke="#334155" stroke-width="2"/>
+  <text x="120" y="100" text-anchor="middle" fill="#1e293b" font-family="sans-serif" font-size="13">LiDAR</text>
+  <text x="120" y="122" text-anchor="middle" fill="#475569" font-family="sans-serif" font-size="12">PointCloud2</text>
+
+  <rect x="240" y="70" width="160" height="88" rx="8" ry="8" fill="#f5f7fa" stroke="#334155" stroke-width="2"/>
+  <text x="320" y="100" text-anchor="middle" fill="#1e293b" font-family="sans-serif" font-size="13">IMU</text>
+  <text x="320" y="122" text-anchor="middle" fill="#475569" font-family="sans-serif" font-size="12">sensor_msgs/Imu</text>
+
+  <rect x="440" y="70" width="200" height="88" rx="8" ry="8" fill="#f5f7fa" stroke="#334155" stroke-width="2"/>
+  <text x="540" y="98" text-anchor="middle" fill="#1e293b" font-family="sans-serif" font-size="13">Camera (opt-in)</text>
+  <text x="540" y="120" text-anchor="middle" fill="#475569" font-family="sans-serif" font-size="12">image + CameraInfo</text>
+  <text x="540" y="142" text-anchor="middle" fill="#475569" font-family="sans-serif" font-size="12">rectify, Canny, distance transform</text>
+
+  <rect x="700" y="60" width="180" height="108" rx="8" ry="8" fill="#f5f7fa" stroke="#334155" stroke-width="2"/>
+  <text x="790" y="95" text-anchor="middle" fill="#1e293b" font-family="sans-serif" font-size="13">rko_lio::ros::Node</text>
+  <text x="790" y="118" text-anchor="middle" fill="#475569" font-family="sans-serif" font-size="12">registration_loop</text>
+  <text x="790" y="140" text-anchor="middle" fill="#475569" font-family="sans-serif" font-size="12">TF: cam to base</text>
+
+  <line x1="200" y1="114" x2="700" y2="114" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="400" y1="114" x2="700" y2="114" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="640" y1="114" x2="700" y2="114" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="120" y="220" width="680" height="160" rx="6" ry="6" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1"/>
+  <text x="460" y="248" text-anchor="middle" fill="#0f172a" font-family="sans-serif" font-size="16" font-weight="bold">Core LIO (rko_lio::core::LIO)</text>
+
+  <rect x="160" y="270" width="200" height="90" rx="8" ry="8" fill="#f5f7fa" stroke="#334155" stroke-width="2"/>
+  <text x="260" y="302" text-anchor="middle" fill="#1e293b" font-family="sans-serif" font-size="13">register_scan</text>
+  <text x="260" y="324" text-anchor="middle" fill="#475569" font-family="sans-serif" font-size="12">Primary ICP (LiDAR only)</text>
+  <text x="260" y="346" text-anchor="middle" fill="#475569" font-family="sans-serif" font-size="12">Dyn weighting if enabled</text>
+
+  <rect x="400" y="270" width="200" height="90" rx="8" ry="8" fill="#f5f7fa" stroke="#334155" stroke-width="2"/>
+  <text x="500" y="302" text-anchor="middle" fill="#1e293b" font-family="sans-serif" font-size="13">Keyframe ICP</text>
+  <text x="500" y="324" text-anchor="middle" fill="#475569" font-family="sans-serif" font-size="12">Same scan, +camera residual</text>
+  <text x="500" y="346" text-anchor="middle" fill="#475569" font-family="sans-serif" font-size="12">Updates map-to-odom delta</text>
+
+  <rect x="640" y="270" width="140" height="90" rx="8" ry="8" fill="#f5f7fa" stroke="#334155" stroke-width="2"/>
+  <text x="710" y="302" text-anchor="middle" fill="#1e293b" font-family="sans-serif" font-size="13">Outputs</text>
+  <text x="710" y="324" text-anchor="middle" fill="#475569" font-family="sans-serif" font-size="12">pose, map</text>
+  <text x="710" y="346" text-anchor="middle" fill="#475569" font-family="sans-serif" font-size="12">map_to_odom()</text>
+
+  <line x1="790" y1="168" x2="790" y2="220" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="360" y1="325" x2="400" y2="325" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="600" y1="325" x2="640" y2="325" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <text x="460" y="405" text-anchor="middle" fill="#475569" font-family="sans-serif" font-size="12">OpenCV stays in the ROS layer; core consumes a float DT buffer and pinhole intrinsics.</text>
+</svg>

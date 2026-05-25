@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="640" viewBox="0 0 900 640">
+  <defs>
+    <marker id="a" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#0f172a"/>
+    </marker>
+  </defs>
+  <text x="450" y="32" text-anchor="middle" fill="#0f172a" font-family="sans-serif" font-size="15" font-weight="bold">LIO::register_scan - per-scan pipeline</text>
+
+  <rect x="60" y="60" width="780" height="70" rx="10" ry="10" fill="#ffffff" stroke="#0f172a" stroke-width="2"/>
+  <text x="450" y="92" text-anchor="middle" fill="#334155" font-family="sans-serif" font-size="13">preprocess_scan: keypoints + map_update_frame + deskewed output</text>
+  <text x="450" y="114" text-anchor="middle" fill="#64748b" font-family="sans-serif" font-size="12">IMU motion model supplies initial_guess for ICP</text>
+
+  <rect x="60" y="170" width="360" height="130" rx="10" ry="10" fill="#e0f2fe" stroke="#0369a1" stroke-width="2"/>
+  <text x="240" y="200" text-anchor="middle" fill="#0f172a" font-family="sans-serif" font-size="15" font-weight="bold">Primary ICP</text>
+  <text x="240" y="226" text-anchor="middle" fill="#334155" font-family="sans-serif" font-size="13">icp(..., camera_ctx = nullptr)</text>
+  <text x="240" y="250" text-anchor="middle" fill="#64748b" font-family="sans-serif" font-size="12">LiDAR point-to-map + optional orientation / beta</text>
+  <text x="240" y="272" text-anchor="middle" fill="#64748b" font-family="sans-serif" font-size="12">Optional dyn_ctx: w = exp(-k * dyn_score)</text>
+
+  <rect x="480" y="170" width="360" height="130" rx="10" ry="10" fill="#ffffff" stroke="#0f172a" stroke-width="2"/>
+  <text x="660" y="200" text-anchor="middle" fill="#0f172a" font-family="sans-serif" font-size="15" font-weight="bold">State update</text>
+  <text x="660" y="226" text-anchor="middle" fill="#334155" font-family="sans-serif" font-size="13">lidar_state.pose &lt;- optimized_pose</text>
+  <text x="660" y="250" text-anchor="middle" fill="#64748b" font-family="sans-serif" font-size="12">Velocity / accel from pose delta</text>
+  <text x="660" y="272" text-anchor="middle" fill="#64748b" font-family="sans-serif" font-size="12">Drives odom to base_link (smooth)</text>
+
+  <line x1="420" y1="235" x2="480" y2="235" stroke="#0f172a" stroke-width="2" marker-end="url(#a)"/>
+
+  <rect x="60" y="340" width="780" height="150" rx="10" ry="10" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+  <text x="450" y="372" text-anchor="middle" fill="#0f172a" font-family="sans-serif" font-size="15" font-weight="bold">Camera keyframe branch (if gates pass)</text>
+  <text x="450" y="396" text-anchor="middle" fill="#334155" font-family="sans-serif" font-size="13">compute_camera_visible_set(map, T_lio, extrinsic, frame, ...)</text>
+  <text x="450" y="418" text-anchor="middle" fill="#64748b" font-family="sans-serif" font-size="12">Second icp(..., camera_ctx) from LIO optimum</text>
+  <text x="450" y="440" text-anchor="middle" fill="#334155" font-family="sans-serif" font-size="13">map_to_odom &lt;- T_cam_icp * inverse(T_lio_only)</text>
+  <text x="450" y="462" text-anchor="middle" fill="#64748b" font-family="sans-serif" font-size="12">Pending image dropped when stale (timestamp &lt;= scan time)</text>
+
+  <line x1="240" y1="300" x2="240" y2="340" stroke="#b45309" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#a)"/>
+  <line x1="660" y1="300" x2="450" y2="340" stroke="#b45309" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#a)"/>
+
+  <rect x="60" y="520" width="780" height="100" rx="10" ry="10" fill="#e0f2fe" stroke="#0369a1" stroke-width="2"/>
+  <text x="450" y="548" text-anchor="middle" fill="#0f172a" font-family="sans-serif" font-size="15" font-weight="bold">Dynamic segmentation (if enabled)</text>
+  <text x="450" y="572" text-anchor="middle" fill="#334155" font-family="sans-serif" font-size="13">collect_icp_telemetry then update_voxel_dyn_stats (EMA)</text>
+  <text x="450" y="594" text-anchor="middle" fill="#64748b" font-family="sans-serif" font-size="12">map.Update(..., accept_mask, pose) skips high dyn_score voxels</text>
+
+  <line x1="660" y1="300" x2="660" y2="520" stroke="#0369a1" stroke-width="2" marker-end="url(#a)"/>
+</svg>

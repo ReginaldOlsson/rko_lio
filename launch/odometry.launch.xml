@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MIT License
+  
+  Copyright (c) 2025 Meher V.R. Malladi.
+  
+  XML launch entry point equivalent to launch/odometry.launch.py.
+  All parameter merging, validation, and optional RViz setup are
+  implemented in the Python launch file; this file only forwards
+  launch arguments so `ros2 launch rko_lio odometry.launch.xml`
+  accepts the same `name:=value` overrides as odometry.launch.py.
+-->
+<launch>
+  <arg name="imu_topic" default=""/>
+  <arg name="lidar_topic" default=""/>
+  <arg name="imu_frame" default=""/>
+  <arg name="lidar_frame" default=""/>
+  <arg name="base_frame" default=""/>
+  <arg name="odom_frame" default="odom"/>
+  <arg name="odom_topic" default="rko_lio/odometry"/>
+  <arg name="invert_odom_tf" default="False"/>
+  <arg name="publish_local_map" default="False"/>
+  <arg name="map_topic" default="rko_lio/local_map"/>
+  <arg name="publish_map_after" default="1.0"/>
+  <arg name="publish_lidar_acceleration" default="False"/>
+  <arg name="deskew" default="True"/>
+  <arg name="voxel_size" default="1.0"/>
+  <arg name="max_points_per_voxel" default="20"/>
+  <arg name="max_range" default="100.0"/>
+  <arg name="min_range" default="1.0"/>
+  <arg name="max_correspondance_distance" default="0.5"/>
+  <arg name="convergence_criterion" default="0.00001"/>
+  <arg name="max_num_threads" default="0"/>
+  <arg name="publish_deskewed_scan" default="false"/>
+  <arg name="deskewed_scan_topic" default="rko_lio/frame"/>
+  <arg name="initialization_phase" default="false"/>
+  <arg name="max_iterations" default="100"/>
+  <arg name="max_expected_jerk" default="3.0"/>
+  <arg name="double_downsample" default="true"/>
+  <arg name="min_beta" default="200"/>
+  <arg name="camera_enabled" default="False"/>
+  <arg name="image_topic" default="image"/>
+  <arg name="camera_info_topic" default="camera_info"/>
+  <arg name="camera_frame" default=""/>
+  <arg name="camera_weight" default="1.0"/>
+  <arg name="camera_max_dt_residual_px" default="20.0"/>
+  <arg name="camera_min_visible_points" default="200"/>
+  <arg name="camera_min_point_depth_m" default="0.5"/>
+  <arg name="camera_use_occlusion_zbuf" default="True"/>
+  <arg name="camera_zbuf_downsample" default="4"/>
+  <arg name="camera_warmup_scans" default="5"/>
+  <arg name="camera_keyframe_motion_threshold_m" default="0.5"/>
+  <arg name="camera_keyframe_rotation_threshold_rad" default="0.2"/>
+  <arg name="camera_keyframe_min_dt_s" default="0.5"/>
+  <arg name="canny_low_threshold" default="50.0"/>
+  <arg name="canny_high_threshold" default="150.0"/>
+  <arg name="canny_aperture_size" default="3"/>
+  <arg name="image_max_rate_hz" default="30.0"/>
+  <arg name="map_frame" default="map"/>
+  <arg name="publish_map_to_odom_tf" default="True"/>
+  <arg name="dynamic_segmentation_enabled" default="False"/>
+  <arg name="dyn_tau_static_m" default="0.10"/>
+  <arg name="dyn_tau_dynamic_m" default="0.30"/>
+  <arg name="dyn_ema_alpha" default="0.20"/>
+  <arg name="dyn_skip_map_score" default="0.60"/>
+  <arg name="dyn_weight_decay_k" default="4.0"/>
+  <arg name="dyn_min_hits_to_trust" default="3"/>
+  <arg name="publish_dynamic_split" default="False"/>
+  <arg name="lts_multiplier_to_seconds" default="0.0"/>
+  <arg name="lts_force_absolute" default="false"/>
+  <arg name="lts_force_relative" default="false"/>
+  <arg name="mode" default="online"/>
+  <arg name="config_file" default=""/>
+  <arg name="dump_results" default="false"/>
+  <arg name="results_dir" default="results"/>
+  <arg name="run_name" default="rko_lio_odometry_run"/>
+  <arg name="rviz" default="false"/>
+  <arg name="rviz_config_file" default="config/default.rviz"/>
+  <arg name="log_level" default="info"/>
+  <arg name="bag_path" default=""/>
+  <arg name="skip_to_time" default="0.0"/>
+  <include file="$(find-pkg-share rko_lio)/launch/odometry.launch.py">
+    <arg name="imu_topic" value="$(var imu_topic)"/>
+    <arg name="lidar_topic" value="$(var lidar_topic)"/>
+    <arg name="imu_frame" value="$(var imu_frame)"/>
+    <arg name="lidar_frame" value="$(var lidar_frame)"/>
+    <arg name="base_frame" value="$(var base_frame)"/>
+    <arg name="odom_frame" value="$(var odom_frame)"/>
+    <arg name="odom_topic" value="$(var odom_topic)"/>
+    <arg name="invert_odom_tf" value="$(var invert_odom_tf)"/>
+    <arg name="publish_local_map" value="$(var publish_local_map)"/>
+    <arg name="map_topic" value="$(var map_topic)"/>
+    <arg name="publish_map_after" value="$(var publish_map_after)"/>
+    <arg name="publish_lidar_acceleration" value="$(var publish_lidar_acceleration)"/>
+    <arg name="deskew" value="$(var deskew)"/>
+    <arg name="voxel_size" value="$(var voxel_size)"/>
+    <arg name="max_points_per_voxel" value="$(var max_points_per_voxel)"/>
+    <arg name="max_range" value="$(var max_range)"/>
+    <arg name="min_range" value="$(var min_range)"/>
+    <arg name="max_correspondance_distance" value="$(var max_correspondance_distance)"/>
+    <arg name="convergence_criterion" value="$(var convergence_criterion)"/>
+    <arg name="max_num_threads" value="$(var max_num_threads)"/>
+    <arg name="publish_deskewed_scan" value="$(var publish_deskewed_scan)"/>
+    <arg name="deskewed_scan_topic" value="$(var deskewed_scan_topic)"/>
+    <arg name="initialization_phase" value="$(var initialization_phase)"/>
+    <arg name="max_iterations" value="$(var max_iterations)"/>
+    <arg name="max_expected_jerk" value="$(var max_expected_jerk)"/>
+    <arg name="double_downsample" value="$(var double_downsample)"/>
+    <arg name="min_beta" value="$(var min_beta)"/>
+    <arg name="camera_enabled" value="$(var camera_enabled)"/>
+    <arg name="image_topic" value="$(var image_topic)"/>
+    <arg name="camera_info_topic" value="$(var camera_info_topic)"/>
+    <arg name="camera_frame" value="$(var camera_frame)"/>
+    <arg name="camera_weight" value="$(var camera_weight)"/>
+    <arg name="camera_max_dt_residual_px" value="$(var camera_max_dt_residual_px)"/>
+    <arg name="camera_min_visible_points" value="$(var camera_min_visible_points)"/>
+    <arg name="camera_min_point_depth_m" value="$(var camera_min_point_depth_m)"/>
+    <arg name="camera_use_occlusion_zbuf" value="$(var camera_use_occlusion_zbuf)"/>
+    <arg name="camera_zbuf_downsample" value="$(var camera_zbuf_downsample)"/>
+    <arg name="camera_warmup_scans" value="$(var camera_warmup_scans)"/>
+    <arg name="camera_keyframe_motion_threshold_m" value="$(var camera_keyframe_motion_threshold_m)"/>
+    <arg name="camera_keyframe_rotation_threshold_rad" value="$(var camera_keyframe_rotation_threshold_rad)"/>
+    <arg name="camera_keyframe_min_dt_s" value="$(var camera_keyframe_min_dt_s)"/>
+    <arg name="canny_low_threshold" value="$(var canny_low_threshold)"/>
+    <arg name="canny_high_threshold" value="$(var canny_high_threshold)"/>
+    <arg name="canny_aperture_size" value="$(var canny_aperture_size)"/>
+    <arg name="image_max_rate_hz" value="$(var image_max_rate_hz)"/>
+    <arg name="map_frame" value="$(var map_frame)"/>
+    <arg name="publish_map_to_odom_tf" value="$(var publish_map_to_odom_tf)"/>
+    <arg name="dynamic_segmentation_enabled" value="$(var dynamic_segmentation_enabled)"/>
+    <arg name="dyn_tau_static_m" value="$(var dyn_tau_static_m)"/>
+    <arg name="dyn_tau_dynamic_m" value="$(var dyn_tau_dynamic_m)"/>
+    <arg name="dyn_ema_alpha" value="$(var dyn_ema_alpha)"/>
+    <arg name="dyn_skip_map_score" value="$(var dyn_skip_map_score)"/>
+    <arg name="dyn_weight_decay_k" value="$(var dyn_weight_decay_k)"/>
+    <arg name="dyn_min_hits_to_trust" value="$(var dyn_min_hits_to_trust)"/>
+    <arg name="publish_dynamic_split" value="$(var publish_dynamic_split)"/>
+    <arg name="lts_multiplier_to_seconds" value="$(var lts_multiplier_to_seconds)"/>
+    <arg name="lts_force_absolute" value="$(var lts_force_absolute)"/>
+    <arg name="lts_force_relative" value="$(var lts_force_relative)"/>
+    <arg name="mode" value="$(var mode)"/>
+    <arg name="config_file" value="$(var config_file)"/>
+    <arg name="dump_results" value="$(var dump_results)"/>
+    <arg name="results_dir" value="$(var results_dir)"/>
+    <arg name="run_name" value="$(var run_name)"/>
+    <arg name="rviz" value="$(var rviz)"/>
+    <arg name="rviz_config_file" value="$(var rviz_config_file)"/>
+    <arg name="log_level" value="$(var log_level)"/>
+    <arg name="bag_path" value="$(var bag_path)"/>
+    <arg name="skip_to_time" value="$(var skip_to_time)"/>
+  </include>
+</launch>

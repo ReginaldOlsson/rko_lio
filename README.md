@@ -84,6 +84,12 @@ A launch file is provided:
 ros2 launch rko_lio odometry.launch.py imu_topic:=<topic> lidar_topic:=<topic> base_frame:=base_link
 ```
 
+The XML wrapper (same arguments) is:
+
+```bash
+ros2 launch rko_lio odometry.launch.xml imu_topic:=<topic> lidar_topic:=<topic> base_frame:=base_link
+```
+
 The three parameters `imu_topic`, `lidar_topic`, and `base_frame` are the minimum you need to specify for the launch file. You can specify them and other options all at once in a config file passed with `config_file:=file.yaml`.
 
 Check further launch configuration options through `ros2 launch rko_lio odometry.launch.py -s`
@@ -91,6 +97,16 @@ Check further launch configuration options through `ros2 launch rko_lio odometry
 More details are available in the [ROS usage docs](https://prbonn.github.io/rko_lio/pages/ros/usage.html).
 
 The same note [above about extrinsics](#extrinsics-and-convention) applies here as well. Though you probably have a well defined TF tree and need not concern yourself with this (I hope).
+
+### Optional camera coupling and dynamic map cleaning
+
+The repository includes **opt-in** monocular camera edge alignment (distance
+transform residuals) and per-voxel dynamic point statistics that downweight bad
+ICP correspondences and optionally split published deskewed scans. Both default
+to **off**; see the Sphinx page
+[Camera coupling and dynamic segmentation](https://prbonn.github.io/rko_lio/pages/camera_coupling.html)
+(source: `docs/pages/camera_coupling.rst`) for architecture diagrams, math,
+and configuration keys (`camera_*`, `dyn_*`, `publish_map_to_odom_tf`, etc.).
 
 ## Citation
 

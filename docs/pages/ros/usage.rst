@@ -7,6 +7,8 @@ The offline node provides a way to directly read data from a rosbag, instead of 
 
 Both nodes can be launched via the ``odometry.launch.py`` launch file, specifying the ``mode`` argument (default: ``online``).
 
+The same entry point is also available as ``odometry.launch.xml``, which forwards the same launch arguments to ``odometry.launch.py`` (useful if your tooling prefers XML or you want a ROS 1–style launch file name).
+
 To see all possible configuration options:
 
 .. code-block:: bash
@@ -58,6 +60,17 @@ Published topics
 - ``/rko_lio/frame``: The input LiDAR scan deskewed using the IMU data.
 
   Only published if ``publish_deskewed_scan:=true``.
+
+  When :doc:`dynamic segmentation <../camera_coupling>` is enabled **and**
+  ``publish_dynamic_split:=true``, the node additionally publishes the same
+  deskewed cloud split by voxel ``dyn_score`` into ``/rko_lio/frame_static``
+  and ``/rko_lio/frame_dynamic`` (topic names overridable via the launch file /
+  YAML). See :doc:`../camera_coupling` for the segmentation pipeline.
+
+- ``map -> odom`` TF: if ``camera_enabled`` and ``publish_map_to_odom_tf`` are
+  true, the node may broadcast a correction transform between ``map_frame`` and
+  ``odom_frame`` so consumers can compose ``map -> base_link`` while keeping
+  ``odom -> base_link`` purely LiDAR-driven. Details in :doc:`../camera_coupling`.
 
 - ``/rko_lio/local_map``: The local map the odometry maintains is published at a set frequency given by ``publish_map_after`` (seconds), and only if ``publish_local_map:=true``.
 
