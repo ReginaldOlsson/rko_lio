@@ -2,3 +2,6 @@ cmake-args:
   - -DCMAKE_BUILD_TYPE=Release
   - -DRKO_LIO_BUILD_ROS=ON
   - -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+  # Pull tsl-robin-map / Sophus / etc. when system packages are missing
+  # (prefer: sudo apt install robin-map-dev ros-$ROS_DISTRO-sophus)
+  - -DRKO_LIO_FETCH_CONTENT_DEPS=ON
